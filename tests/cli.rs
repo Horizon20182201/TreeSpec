@@ -46,23 +46,14 @@ fn init_creates_only_metadata_and_refuses_reinitialization() {
     assert!(output.status.success(), "{:?}", output);
     let metadata = root.join(".organizer");
     assert_eq!(
-        fs::read_to_string(metadata.join("drafts/initial.tree")).unwrap(),
-        "!tree 1\n"
-    );
-    assert!(
-        fs::read_to_string(metadata.join("init.log"))
-            .unwrap()
-            .contains("completed")
-    );
-    assert_eq!(
         fs::read_to_string(metadata.join(".gitignore")).unwrap(),
         "drafts/\nplans/\nstate/\ncache/\n*.log\n.env\n"
     );
     for dir in ["drafts", "plans", "state", "cache"] {
         assert!(metadata.join(dir).is_dir());
     }
-    assert!(!metadata.join("structure.tree").exists());
-    assert!(!metadata.join(".git").exists());
+    assert!(metadata.join("structure.tree").is_file());
+    assert!(metadata.join(".git").is_dir());
     assert!(!root.join(".git").exists());
     assert!(!run(root, &["init"]).status.success());
     assert_eq!(

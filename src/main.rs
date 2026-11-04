@@ -7,6 +7,8 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use organizer::migration::{self, MigrationPlan};
+use organizer::sync as management;
 use organizer::tree::{
     compare_trees, parse_normalized_tree, parse_tree, parse_tree_with_base, render_tree,
 };
@@ -15,7 +17,7 @@ use organizer::tree::{
 #[command(
     name = "organizer",
     version,
-    about = "TreeSpec Organizer M0: structural metadata only"
+    about = "TreeSpec Organizer M2: reviewed plans and safe file migration"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -24,10 +26,28 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create metadata directories and an initial draft; does not scan or create a baseline.
+    /// Scan files and initialize SQLite plus a dedicated structure-only Git repository.
     Init {
         #[arg(long, default_value = ".")]
         root: PathBuf,
+    },
+    /// Read-only scan showing added/missing/moved/changed/unknown/conflicts as JSON.
+    Status {
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Record confirmed filesystem changes; never move or delete managed files.
+    Sync {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Record ambiguous identities as missing + new; never infer their moves.
+        #[arg(long)]
+        accept_unknown: bool,
+    },
+    /// Show the local structure snapshot history.
+    History {
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
     /// Validate a TreeSpec document (missing IDs are allowed).
     Validate { tree: PathBuf },
@@ -40,8 +60,14 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Print a structural JSON diff, NOT an executable migration plan. Exit 2 if unresolved.
+    /// Build a verified migration plan (or a document-only diff outside a managed root).
     Plan {
+        /// Use this managed root; never infer a root from the input document paths.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Explicitly compare documents without looking for a managed root.
+        #[arg(long, conflicts_with = "root")]
+        structural_only: bool,
         #[arg(long)]
         from: PathBuf,
         #[arg(long)]
@@ -49,6 +75,31 @@ enum Command {
         /// Write to a new report file, otherwise print to stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Preview a plan by default; --yes explicitly authorizes filesystem changes.
+    Apply {
+        plan: PathBuf,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Write a safely quoted script that previews a plan through organizer apply.
+    ExportScript {
+        plan: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Inspect a journaled run without replaying moves.
+    Recover {
+        run_id: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Retry only the Git recording of an already published migration.
+        #[arg(long)]
+        finish_git: bool,
     },
 }
 
@@ -64,7 +115,33 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
     match cli.command {
-        Command::Init { root } => init(&root)?,
+        Command::Init { root } => {
+            let report = management::init(&root)?;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+        }
+        Command::Status { root } => {
+            let report = management::status(&management::resolve_root(root.as_deref())?)?;
+            let blocked = !report.scan_complete
+                || !report.conflicts.is_empty()
+                || !report.unknown.is_empty()
+                || report.pending_git;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+            return Ok(if blocked { 2 } else { 0 });
+        }
+        Command::Sync {
+            root,
+            accept_unknown,
+        } => {
+            let report =
+                management::sync(&management::resolve_root(root.as_deref())?, accept_unknown)?;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+        }
+        Command::History { root } => {
+            output(
+                &management::history(&management::resolve_root(root.as_deref())?)?,
+                None,
+            )?;
+        }
         Command::Validate { tree } => {
             let parsed = parse_tree(&read_tree(&tree)?)?;
             println!("Valid TreeSpec v1: {} nodes", parsed.nodes.len());
@@ -79,15 +156,70 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             };
             output(&render_tree(&parsed)?, out.as_deref())?;
         }
-        Command::Plan { from, to, out } => {
+        Command::Plan {
+            from,
+            to,
+            out,
+            root,
+            structural_only,
+        } => {
             let old = parse_normalized_tree(&read_tree(&from)?)?;
+            let managed_root = if structural_only {
+                None
+            } else if let Some(root) = root {
+                Some(management::resolve_root(Some(&root))?)
+            } else {
+                management::discover_root()?
+            };
             let new = parse_tree_with_base(&read_tree(&to)?, &old)?;
+            if let Some(root) = managed_root {
+                let plan = migration::plan(&root, &old, &new)?;
+                output(
+                    &(serde_json::to_string_pretty(&plan)? + "\n"),
+                    out.as_deref(),
+                )?;
+                return Ok(if plan.unresolved.is_empty() { 0 } else { 2 });
+            }
             let report = compare_trees(&old, &new)?;
             output(
                 &(serde_json::to_string_pretty(&report)? + "\n"),
                 out.as_deref(),
             )?;
             return Ok(if report.unresolved.is_empty() { 0 } else { 2 });
+        }
+        Command::Apply {
+            plan,
+            root,
+            dry_run: _,
+            yes,
+        } => {
+            let root = management::resolve_root(root.as_deref())?;
+            let plan: MigrationPlan = serde_json::from_str(&read_tree(&plan)?)?;
+            if yes {
+                let report = migration::apply_plan(&plan, &root)?;
+                output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+            } else {
+                let report = migration::validate_plan(&plan, &root)?;
+                output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+                eprintln!(
+                    "Dry-run only; no changes made. Execute with --yes after reviewing the plan."
+                );
+            }
+        }
+        Command::ExportScript { plan, out } => {
+            output(&migration::export_script(&plan)?, Some(&out))?;
+        }
+        Command::Recover {
+            run_id,
+            root,
+            finish_git,
+        } => {
+            let report = migration::journal::recover(
+                &management::resolve_root(root.as_deref())?,
+                &run_id,
+                finish_git,
+            )?;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
         }
     }
     Ok(0)
@@ -148,57 +280,5 @@ fn check_directory(path: &Path) -> io::Result<()> {
             ));
         }
     }
-    Ok(())
-}
-
-fn init(root: &Path) -> io::Result<()> {
-    check_directory(root)?;
-    let metadata = root.join(".organizer");
-    // create_dir refuses an existing directory, file, or symlink. Never reuse state.
-    let builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    let builder = {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = builder;
-        builder.mode(0o700);
-        builder
-    };
-    builder.create(&metadata)?;
-    let result = (|| -> io::Result<()> {
-        let mut log = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(metadata.join("init.log"))?;
-        writeln!(
-            log,
-            "M0 metadata initialization started; no scan, baseline, or Git repository"
-        )?;
-        log.sync_all()?;
-        for name in ["drafts", "plans", "state", "cache"] {
-            builder.create(metadata.join(name))?;
-            writeln!(log, "created directory {name}")?;
-            log.sync_all()?;
-        }
-        output(
-            "drafts/\nplans/\nstate/\ncache/\n*.log\n.env\n",
-            Some(&metadata.join(".gitignore")),
-        )?;
-        output("!tree 1\n", Some(&metadata.join("drafts/initial.tree")))?;
-        writeln!(log, "completed: .gitignore and drafts/initial.tree created")?;
-        log.sync_all()
-    })();
-    if let Err(error) = result {
-        return Err(io::Error::new(
-            error.kind(),
-            format!(
-                "initialization incomplete at {}; inspect init.log before manual recovery: {error}",
-                metadata.display()
-            ),
-        ));
-    }
-    println!(
-        "Initialized M0 metadata at {}\nDraft: drafts/initial.tree\nNo filesystem scan, structure.tree baseline, SQLite, or Git repository was created (M1).",
-        metadata.display()
-    );
     Ok(())
 }

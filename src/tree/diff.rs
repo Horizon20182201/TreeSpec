@@ -92,7 +92,10 @@ pub fn compare_trees(old: &TreeSpec, new: &TreeSpec) -> Result<DiffReport, TreeE
         changes: Vec::new(),
         effective_path_changes: Vec::new(),
         unresolved: Vec::new(),
-        warnings: vec!["M0: structural report only; disk state is unverified and no operations are executable.".to_owned()],
+        warnings: vec![
+            "Structural report only; disk state is unverified and no operations are executable."
+                .to_owned(),
+        ],
     };
     for id in ids {
         let before = old_nodes.get(id).copied();

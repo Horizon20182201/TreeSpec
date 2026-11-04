@@ -1,77 +1,188 @@
-# TreeSpec Organizer — M0
+# TreeSpec Organizer — M2
 
-基于 Rust 的文件结构管理 CLI。当前实现开发规范中的 **M0：TreeSpec v1 + 稳定 ID 结构 Diff**，可以离线运行，无需 LLM Key。
+基于 Rust 的本地文件结构管理 CLI。已完成 **M0：TreeSpec v1 / ID Diff**、**M1：扫描 / 身份索引 / Git 结构同步**、**M2：安全迁移规划与执行**，无需 LLM Key。
 
-规范见 [TreeSpec_Organizer_MVP_Development_Spec.md](docs/TreeSpec_Organizer_MVP_Development_Spec.md)。M0 的 `plan` 生成纯结构报告，**不是可执行的迁移计划**；不会移动、重命名、删除或创建被管理的普通文件。
+需求见 [开发规范](docs/TreeSpec_Organizer_MVP_Development_Spec.md)。工具只管理结构元数据，不把用户文件正文写进 Git。`sync` 记录已经发生的磁盘变化；`plan` 根据稳定 ID 规划路径变更，`apply --yes` 才执行真实移动。
 
-## 构建与快速运行
+## 完整 M2 流程
 
-使用稳定版 Rust 工具链（Rust 2024 edition；本次验证使用 Rust 1.95 和 Clippy 1.97）。保留 `Cargo.lock` 以复现依赖版本。
+需要 Linux、稳定版 Rust、本机 Git 和 C 编译器。M2 要求内核支持 `openat2`（Linux 5.6+）且文件系统支持 `RENAME_NOREPLACE`；能力不足时报错停止，无覆盖式 rename 降级。SQLite 随 `rusqlite` 编译。保留 `Cargo.lock`；本次验证使用 Rust 1.95、Clippy 1.97。
+
+以下演示保留全部 ID，将 `Inbox` 整体改名为 `Archive`：
+
+```bash
+cargo build --locked
+export PATH="$PWD/target/debug:$PATH"
+demo="$(mktemp -d)"
+mkdir "$demo/Inbox"
+printf 'hello\n' > "$demo/Inbox/note.txt"
+organizer init --root "$demo"
+
+# 只编辑草案，保留现有 @ID；也可以用文本编辑器修改名称/缩进
+sed 's/^Inbox\//Archive\//' "$demo/.organizer/structure.tree" \
+  > "$demo/.organizer/drafts/new.tree"
+organizer plan --root "$demo" \
+  --from "$demo/.organizer/structure.tree" \
+  --to "$demo/.organizer/drafts/new.tree" \
+  --out "$demo/.organizer/plans/migration.json"
+organizer apply "$demo/.organizer/plans/migration.json" --root "$demo" --dry-run
+organizer apply "$demo/.organizer/plans/migration.json" --root "$demo" --yes
+organizer history --root "$demo"
+cat "$demo/Archive/note.txt"
+```
+
+也可以添加目录声明并把已有文件节点缩进到新目录下；保留文件 ID。规范中的论文分类案例由 [M2 集成测试](tests/migration_integration.rs) 自动验证：两个 `mkdir` + 两个 `move_file`，文件内容和 ID 均保留，Git 只增加结构提交。
+
+`examples/old.tree`、`examples/new.tree` 用于独立文档比较，里面的示例 ID 不是任意新初始化根目录的真实 ID。实际迁移从该根的 `.organizer/structure.tree` 复制草案。
+
+## 构建与完整 M1 流程
+
+M1 的扫描与同步功能继续可用：
 
 ```bash
 cargo build --locked
 cargo run -- --help
-cargo run -- validate examples/old.tree
-cargo run -- normalize examples/new.tree
-cargo run -- plan --from examples/old.tree --to examples/new.tree
 
-# 可选：写入尚不存在的报告文件
-cargo run -- plan --from examples/old.tree --to examples/new.tree --out diff.json
+# 使用新的临时目录演示，下面的 mv 是用户手工操作
+demo="$(mktemp -d)"
+mkdir "$demo/Inbox"
+printf 'hello\n' > "$demo/Inbox/note.txt"
+cargo run -- init --root "$demo"
+
+mkdir "$demo/Archive"
+mv "$demo/Inbox/note.txt" "$demo/Archive/note.txt"
+cargo run -- status --root "$demo"
+cargo run -- sync --root "$demo"
+cargo run -- history --root "$demo"
 ```
 
-构建后的程序是 `target/debug/organizer`。示例报告有 6 条变化：2 个 `add_node`、2 个 `reparent_node`、1 个 `rename_node`、1 个 `update_description`，`unresolved` 为空。文件路径仅从 Tree 计算，无需真实的 PDF 文件或对应目录。
+构建后的程序为 `target/debug/organizer`。以上流程会保留 `note.txt` 的 ID，更新 `structure.tree` 和 SQLite，并增加一次 `reconcile:` 结构提交。原地修改内容后再次 `sync` 只更新扫描缓存，不产生结构提交。
+
+独立比较示例：
+
+```bash
+cargo run -- validate examples/old.tree
+cargo run -- normalize examples/new.tree
+cargo run -- plan --structural-only --from examples/old.tree --to examples/new.tree
+```
+
+示例报告包含 6 条变化：新增 2 个目录、迁移 2 个文件、改名 1 个目录、更新 1 条说明；`unresolved` 为空。
 
 ## 当前命令
 
-| 命令 | M0 行为 |
+| 命令 | 行为 |
 | --- | --- |
-| `organizer init [--root PATH]` | 在已有目录内创建 `.organizer` 元数据目录和空的初始草案；默认当前目录 |
-| `organizer validate TREE` | 只读检查语法和结构；允许缺失 ID，不回写 |
-| `organizer normalize TREE [--base OLD] [--out PATH]` | 补齐 ID、规范排序并输出 Tree；默认 stdout |
-| `organizer plan --from OLD --to NEW [--out PATH]` | 以 OLD 为基线规范化 NEW，输出结构 Diff JSON；默认 stdout |
+| `organizer init [--root PATH]` | 扫描已有根目录，初始化 Tree、SQLite 和专用 Git 仓库；默认当前目录 |
+| `organizer status [--root PATH]` | 只读扫描并输出 JSON：added / missing / moved / changed / unknown / conflicts / warnings |
+| `organizer sync [--root PATH] [--accept-unknown]` | 更新已确认的结构与索引，仅在结构变化时提交 Git |
+| `organizer history [--root PATH]` | 查看本地结构提交历史 |
+| `organizer validate TREE` | 只读校验 Tree；允许缺失 ID，不回写 |
+| `organizer normalize TREE [--base OLD] [--out PATH]` | 补齐 ID、规范排序；默认 stdout |
+| `organizer plan --from OLD --to NEW [--root PATH] [--out PATH]` | 检查基线与磁盘，生成含前置条件的迁移计划；无管理根时保留结构 Diff |
+| `organizer plan --structural-only --from OLD --to NEW [--out PATH]` | 显式仅比较文档，不查找管理根或扫描磁盘 |
+| `organizer apply PLAN [--root PATH] [--dry-run \| --yes]` | 默认只读预览；`--yes` 才执行，两个选项互斥 |
+| `organizer export-script PLAN --out SCRIPT` | 生成正确 shell 转义的 CLI 包装脚本；不嵌入文件操作 |
+| `organizer recover RUN_ID [--root PATH] [--finish-git]` | 默认只读检查；可重试已完成迁移的 Git 记录，绝不重放文件移动 |
 
-退出码：`0` 表示命令完成且没有未解决文件；`1` 表示解析、校验、身份类型冲突或 I/O 错误；`2` 表示 `plan` 已输出报告但存在 `unresolved`。Clap 的命令行参数错误也使用 `2`，会输出用法错误而非 JSON 报告。`0` **不代表**已验证磁盘条件或可以执行迁移。
+未指定根目录时，从当前目录向上查找最近的 `.organizer`。`plan` 找不到管理根时保留 M0 的独立文档比较能力。`apply` 的根由当前目录或显式 `--root` 选择，必须与计划完全一致；不会从计划路径或内容自动切换根。`--root` 与 `--structural-only` 互斥。
 
-输出文件使用 `create_new`，已存在的文件、目录和符号链接均不覆盖，包括输入 Tree 本身。输出父目录必须已存在；元数据写入拒绝包含 `..` 的路径和已有符号链接祖先。用户应使用 `--out` 保存文件，避免 shell 重定向覆盖输入。
+退出码：正常完成为 `0`；I/O、解析、验证、执行失败或未完成迁移阻断命令时为 `1`；`status` 能生成报告且有不完整扫描、冲突、未知身份或待提交 Git 时为 `2`；`plan` 有未解决项也为 `2`。Clap 参数错误使用 `2` 并输出用法。普通磁盘变化本身不会使 `status` 失败。计划生成成功后，执行时仍须重新验证。
 
-### 初始化的阶段边界
+`normalize` / `plan --out` / `export-script --out` 只创建新输出，不覆盖已有文件或输入 Tree。输出父目录必须已存在；根目录与元数据输出路径拒绝 `..` 和已有符号链接祖先。不要用 shell 重定向覆盖输入文件。将草案、计划放在 `.organizer` 内；写到受管理用户目录会被扫描为新增文件，使旧计划过期。
+
+## 计划、执行与恢复
+
+迁移计划 JSON v1 包含真实 `scan_id`、规范化目标 Tree 全文、基线/目标的 SHA-256、根身份、索引代次、Git HEAD、全部节点的身份/属性前置条件、扫描边界、确定性操作序列及 `unresolved`。`plan_id` 是整个规范化计划（该字段置空）的 SHA-256；相同输入和同一快照得到相同结果，重新扫描有新的扫描 ID。摘要用于一致性检查，不是数字签名。执行时根据当前可信基线、磁盘和内嵌目标重新生成并比较计划，不信任外部编辑的操作列表，也不重新读取草案。
+
+支持 `mkdir`、`move_file`、`move_directory`。优先整体移动目录，并在模拟目录空间中更新后代路径，避免重复搬移；混合迁入/迁出按依赖安排。目标槽位必须为空或已由先前步骤让出。缺失旧节点、新增无来源文件、受保护/跳过子树、受影响硬链接、循环路径交换均阻断，未解决计划不包含可执行操作。M2 保守要求保留所有旧目录，不实现可选的空目录删除。
+
+`apply` 默认与 `--dry-run` 都只读：不创建操作数据库、不写日志、不提交 Git。`--yes` 取得独占元数据锁，再次检查基线和完整扫描，将全部步骤以 `pending` 写入 SQLite 后逐步执行。每步前后校验扫描及身份；成功后同步父目录并持久化 `done`。任何失败立即停止，保留已发生的文件移动，不自动回滚。完成后再次验证目标，才发布 Tree/索引和一次 `refactor:` Git 提交；纯无变化计划不增加 Git 提交。
+
+真实操作使用根目录描述符、`openat2(BENEATH | NO_SYMLINKS | NO_XDEV)` 和叶名称，检查父目录身份/保护标记；禁止绝对路径、`..`、`.git`、`.organizer`、自身后代和挂载点穿越。移动使用原子 `RENAME_NOREPLACE`，即使目标在检查后被创建也不会覆盖；没有 copy+delete 或 shell 文件操作降级。新目录权限为 `0700`（受 umask 约束）。
 
 ```bash
-mkdir -p /tmp/organizer-demo
-cargo run -- init --root /tmp/organizer-demo
+# 在 apply --yes 之前，可导出并运行预览脚本；不隐含 --yes
+organizer export-script "$demo/.organizer/plans/migration.json" \
+  --out "$demo/.organizer/plans/migrate.sh"
+(cd "$demo" && bash .organizer/plans/migrate.sh)
+
+# 使用 apply 输出/报错中的实际 run_id
+organizer recover run_UUID --root "$demo"
+organizer recover run_UUID --root "$demo" --finish-git
 ```
 
-生成：
+恢复行为：
+
+- **文件操作部分完成或崩溃**：后续 `status`/`sync`/`plan`/`apply` 报告未完成 run 并停止。`recover` 返回原计划、逐步状态、完成计数、错误、当前完整扫描和元数据发布标记，辅助人工核对；`pending` 可能代表操作已经落盘但尚未确认，绝不能盲目重试。M2 不提供文件步骤的自动续跑/回滚/清除未完成状态。
+- **文件和元数据已完成，仅 Git 失败**：报错明确区分“迁移完成”和“Git 待记录”。解决 Git 错误后使用 `recover RUN_ID --finish-git`，重新检查目标、身份和 Git 前置条件，只补齐提交及确认。包括 HEAD 已更新、索引更新失败的情况，不重复提交或移动。
+- **Tree/索引发布中断或 SQLite 恢复文件存在**：保留数据库、恢复文件及 `pending.json`，先备份元数据并人工检查；不自动删除标记或修复数据库。此时 `--finish-git` 拒绝继续。SQLite 日志本身无法安全只读打开时，恢复命令会明确报错要求人工检查。
+
+执行成功后草案和计划仍保留供审核；它们会继续触发 M1 的待处理草案提示，归档后再 `sync`。完成的日志永久保留，索引代次和日志共同防止重复执行旧计划。
+
+## 元数据、扫描和同步边界
 
 ```text
 .organizer/
+├── .git/                 # 仅跟踪 structure.tree；无远端
 ├── .gitignore
-├── init.log
-├── drafts/
-│   └── initial.tree  # 仅包含 !tree 1
-├── plans/
+├── structure.tree        # 已确认的完整受管理结构
+├── sync.log              # 元数据更新记录，不提交
+├── drafts/               # 不提交
+├── plans/                # 不提交
 ├── state/
-└── cache/
+│   ├── index.sqlite      # 身份、扫描缓存、基线与 Git 状态
+│   ├── operations.sqlite # M2 首次真实执行时创建；计划、逐步状态与错误
+│   ├── lock              # 进程共享/独占锁，崩溃后由操作系统释放
+│   └── pending.json      # 仅跨 Tree/数据库更新期间存在
+└── cache/                # 不提交
 ```
 
-`init` 不扫描磁盘，因此不创建 `structure.tree` 基线，不初始化 SQLite 或 Git，也不表示现有文件已纳入管理。完整初始化留给 M1，避免把空 Tree 误当成实际状态。已有 `.organizer` 时直接失败；创建过程中失败会保留已创建的元数据并提示检查 `init.log`，不会删除目录或盲目重试。Unix 下新建元数据目录权限为 `0700`。
+新建元数据目录权限为 `0700`。SQLite 保存 `logical_id`、`last_path`、类型、device/inode、大小、mtime、ctime、可用时的 birthtime、硬链接数、保护标记和 `last_seen_scan`；Tree 仍只保存名称、ID、父子关系和说明。
 
-### 正确保留身份
+扫描逐项枚举目录，只读取元数据，不读文件正文。Linux 使用目录描述符与 `O_NOFOLLOW`，不递归跟随符号链接。内建跳过任何层级的 `.organizer`、根目录的 `.git`、符号链接及特殊文件；嵌套目录只要有 `.git` 标记，就作为受保护的独立目录节点，不进入内部，并在报告中提示。
 
-先为旧树补齐并保存 ID，再复制它编辑草案。移动或改名时保留整棵子树已有的 ID。
+权限错误、不可达目录、不可表达为 TreeSpec 的名称、非 UTF-8 名称、遍历中检测到的目录变化都会使扫描不完整。此时不推断 missing，不发布新快照。完整清单保存在内存，内存开销与节点数和路径长度有关，不随文件正文大小增长。
+
+身份匹配：
+
+1. 同路径、同类型且文件键/birthtime 不冲突时继承 ID。
+2. 跨路径仅在同卷文件键一对一匹配时关联移动；文件还要求大小、mtime 一致且不是多重硬链接。不会用同名或相同内容猜测移动。
+3. 复制或已确认的替换得到新 ID。每个管理根使用独立随机命名空间；新 ID 由命名空间、索引代次、路径和身份信息生成，因此只读 status 的临时新增 ID 可重复，并避免复用旧身份。
+4. 文件键相同但身份关联不确定时显示 `unknown`，默认阻止 `sync`。审核后可用 `sync --accept-unknown` 明确接受“旧节点消失 + 新节点出现”；该选项不会确认猜测的移动，也不能绕过其他冲突。
+
+外部删除仅从快照中移除并显示 missing，不执行真实删除，不承诺恢复正文。目录整体移动会延续已确认的目录和子文件 ID。说明按已有 ID 保留。硬链接按目录项分配逻辑 ID，存在歧义的改名不会强行关联。
+
+`sync` 会检查两次扫描是否一致，再发布元数据。以下情况都会阻止同步：手工编辑已应用基线、数据库/根目录/HEAD 不一致、人工暂存修改、额外 Git 暂存路径、不完整扫描、已有受保护子树的范围变化、旧文件被符号链接或特殊文件遮蔽、未完成更新标记。
+
+为避免静默覆盖草案，`drafts/` 或 `plans/` 有内容时也阻止同步。完成审核后，把这些文件归档到这两个目录之外再同步；建议仍保存在 `.organizer` 下，避免把归档当作新用户文件纳入扫描。未修改的 M0 `drafts/initial.tree` 不算待处理草案。`plan` 允许草案存在，但要求 `--from` 等于已记录基线且磁盘未变化。
+
+## Git 隔离、失败与 M0 升级
+
+Git 只在 `.organizer` 中初始化，且每个提交只包含一个普通文件 `structure.tree`。使用 Git plumbing 构造单文件快照，不递归 add。禁用 hooks、签名、内容过滤和全局配置，并清理继承的 `GIT_*` 环境，避免切换工作树或运行用户过滤器。结构提交使用本地身份 `TreeSpec Organizer <organizer@localhost>`，不修改用户全局 Git 设置，不连接远端。
+
+SQLite 更新使用事务和 FULL 同步，Tree 使用临时文件及原子替换；两者之间由 `state/pending.json` 标记覆盖。M1 不宣称跨文件事务：
+
+- **仅 Git 记录失败**：Tree 与 SQLite 已保存，数据库标记 `pending_git`。`status` 只读报告该状态；排除 Git 错误后运行 `sync` 重试。若提交已发布但后续步骤失败，会核对父提交和 Tree 内容后补齐状态，不重复产生提交，也不重复任何用户文件操作。人工暂存的冲突仍会阻断重试。
+- **Tree/数据库发布中断**：保留 `pending.json` 或 SQLite 恢复文件并停止。先备份 `.organizer`，检查日志、标记里的前后 Tree、数据库和 Git；不能未经核对就删除标记或盲目重放。M2 的 `recover` 针对迁移日志，不会自动修复 M1 的发布中断。
+- **人工修改基线**：先保存为草案，再恢复索引记录的基线。仅当没有待提交 Git 状态时，Git HEAD 才是可直接参照的已提交基线。
+
+已有 M0 目录可重新运行 `init --root PATH` 升级，但只接受可识别的已完成 M0 布局、原始忽略文件、空状态目录和未修改初始草案。会保留旧日志与初始草案；已有 M1 数据、陌生文件、未完成初始化或用户草案均不会被覆盖。
+
+## Tree 文档中的 ID
+
+独立文档先规范化旧树再编辑：
 
 ```bash
-# 三个输出文件都必须尚不存在
 cargo run -- normalize handwritten.tree --out old.normalized.tree
 cp old.normalized.tree draft.tree
-# 编辑 draft.tree：修改名称、缩进、说明，保留原有 @ID
+# 修改名称、缩进或说明，保留整棵子树原有 @ID
 cargo run -- normalize draft.tree --base old.normalized.tree --out new.normalized.tree
-cargo run -- plan --from old.normalized.tree --to new.normalized.tree
+cargo run -- plan --structural-only --from old.normalized.tree --to new.normalized.tree
 ```
 
-`plan --from` 和 `normalize --base` 要求旧树所有节点都有显式 ID。新树中缺少 ID 的节点只在**同路径、同类型**时继承旧 ID，其余分配新 ID。即使父目录显式保留 ID 并改名，无 ID 子文件也不会凭名称推断身份；应保留子文件原 ID，否则会出现缺失旧文件和新增文件两个未解决项。
+对于已初始化目录，直接复制 `.organizer/structure.tree` 到 `drafts/` 编辑即可。不要直接编辑已应用的基线。
 
-显式 ID 优先。如果同路径的隐式继承 ID 已被草案其他节点显式占用，停止并要求为该节点明确指定 ID。显式更换文件 ID 即使路径不变，也表示旧文件缺失和一个无来源新文件。
+`plan --from` 和 `normalize --base` 要求旧树所有节点都有显式 ID。新树缺失 ID 的节点只按同路径、同类型继承旧 ID，其他节点分配新 ID。父目录改名后，无 ID 子文件不会凭名称继承身份，所以编辑草案时应保留所有已有 ID。显式 ID 优先；隐式继承与其他显式 ID 冲突时停止并要求明确指定。
 
 ## TreeSpec v1
 
@@ -98,7 +209,7 @@ Inbox/ @d_inbox
 
 ## Diff 报告与安全语义
 
-报告含 `schema_version: 1`、`report_type: "tree_diff"`、`changes`、`effective_path_changes`、`unresolved` 和 `warnings`。没有 `operations`、磁盘扫描 ID、迁移前置条件或虚假的 digest。
+独立文档结构报告含 `schema_version: 1`、`report_type: "tree_diff"`、`changes`、`effective_path_changes`、`unresolved` 和 `warnings`，不能交给 `apply`。它与上面的 M2 迁移计划是不同格式。
 
 `changes` 中每条记录包含 `id`、`node_kind`、`change`、`old_path`、`new_path` 以及前后说明。变化类型：
 
@@ -112,39 +223,43 @@ Inbox/ @d_inbox
 
 同一节点可同时产生多类变化。同 ID 的类型改变会报错。有效路径另行计算：祖先移动导致的子路径变化放入 `effective_path_changes`，其中 `inherited: true` 表示节点本身没有 rename/reparent，避免重复生成子节点改名。
 
-旧文件 ID 消失时产生 `unresolved_missing_file`；目标新增文件 ID 产生 `unresolved_new_file`。M0 无磁盘扫描，所有新增文件都视为来源尚未验证，即使磁盘可能存在同路径文件也不能自动认可。删除目录声明会给出警告，不能据此清理真实目录。
+旧文件 ID 消失时产生 `unresolved_missing_file`；目标新增文件 ID 产生 `unresolved_new_file`。结构 Diff 不承担文件来源验证；M2 也不会凭同路径或同内容认定新旧文件属于同一身份。删除目录声明会给出警告，不能据此清理真实目录。
 
-报告按 ID、固定变化类型顺序输出。结构验证拒绝悬空父引用、文件父节点、环、重复路径/ID；Diff 还保守拒绝目录的新路径位于自身旧路径之下的情况。有效的路径交换可以展示为结构差异，但 M0 不决定其可执行性或操作顺序。
+报告按 ID、固定变化类型顺序输出。结构验证拒绝悬空父引用、文件父节点、环、重复路径/ID；Diff 还保守拒绝目录的新路径位于自身旧路径之下的情况。路径交换可以展示为结构差异，M2 规划器将无法安排的循环标为未解决。
 
 ## 模块与设计决策
 
-采用单 crate，核心库不依赖 CLI 或真实磁盘：
+单 crate，按规范保持模块边界：
 
 ```text
 src/
-├── main.rs          # clap、输入/输出、M0 元数据初始化
-├── lib.rs
-├── error.rs         # 可区分的解析、验证、冲突错误
-└── tree/
-    ├── model.rs     # NodeKind / TreeNode / TreeSpec
-    ├── parser.rs    # 逐行语法解析和 ID 规范化
-    ├── validate.rs  # AST 不变量与相对路径计算
-    ├── render.rs    # 稳定排序、JSON 名称转义、LF 输出
-    ├── diff.rs      # ID 比较、继承路径变化、未解决项
-    └── tests.rs     # 核心单元测试
-tests/               # TreeSpec、Diff、CLI 集成测试
-examples/            # old.tree / new.tree
+├── main.rs          # clap、命令编排、JSON 与文本输出
+├── error.rs         # Tree / I/O / SQLite / 状态错误
+├── tree/            # AST、Parser、Validator、Renderer、Diff
+├── scan/
+│   ├── inventory.rs # 只读枚举、扫描完整性、受保护路径
+│   └── identity.rs  # 纯身份关联、变更与歧义报告
+├── storage.rs       # SQLite 身份/缓存事务与保存状态
+├── sync.rs          # init、status、sync、基线预检与重试
+├── git.rs           # 专用仓库、单文件快照、历史
+├── migration/
+│   ├── plan.rs      # 类型、摘要、确定性命名空间模拟与排序
+│   ├── validate.rs  # 严格 JSON/Tree、基线和扫描前置条件验证
+│   ├── filesystem.rs # Linux 描述符与原子 no-replace 操作
+│   ├── execute.rs   # 执行、最终验证、元数据发布与 Git 重试
+│   └── journal.rs   # SQLite 操作日志与恢复检查
+└── metadata.rs      # 元数据路径校验、锁、发布标记、日志
 ```
 
-公共 API 从 `organizer::tree` 导出：`parse_tree`、`parse_normalized_tree`、`parse_tree_with_base`、`validate_tree`、`render_tree`、`relative_paths`、`diff` 和 `compare_trees`。前三个规范化入口返回所有节点都具有非空 ID 的 AST。AST 可以由库调用方构造，因此渲染、路径计算和 Diff 都重新验证，不依赖解析器曾运行过。
+Tree 公共 API 从 `organizer::tree` 导出：`parse_tree`、`parse_normalized_tree`、`parse_tree_with_base`、`validate_tree`、`render_tree`、`relative_paths`、`diff`、`compare_trees`。`scan::scan` 返回带 `complete`、warnings、errors 的清单，`scan::identity::reconcile` 是可独立测试的纯匹配逻辑；`storage::load` 只读加载保存状态。
 
-缺失 ID 使用 UUID v5，由固定命名空间、TreeSpec 版本、类型、首次声明路径及碰撞盐确定性分配；预留所有显式 ID 和基线 ID，避免占用其他节点身份。这仅是**首次分配策略**，不是从路径推断文件身份的规则。持久化之后 ID 不随改名重算；不同管理根中首次生成的同路径节点可能得到相同 ID，不能拿它跨根关联文件。M1 的新磁盘对象应使用管理根隔离的随机/命名空间身份，并存入索引。
+迁移 API：`migration::build_plan(&PlanningContext)` 是纯规划逻辑；`migration::plan(root, old, target)` 负责只读磁盘上下文；`validate_plan` 只读验证；`apply_plan` 执行（库调用方负责取得用户确认）；`journal::recover` 检查或仅补齐 Git。JSON 使用白名单枚举及 `deny_unknown_fields`，拒绝陌生操作和字段。
 
-树结构存为带 `parent_id` 的平面节点数组，数组顺序没有语义。验证和渲染采用迭代遍历，避免深层树递归溢出。ID 比较预期为 `O(N+M)`，另加排序和完整路径物化开销；路径内存与所有路径总长度成正比。相对路径使用 `/` 文本分隔，不作为 shell 命令。
+独立 Tree 文档的首次 ID 分配仍使用 UUID v5（类型、路径、版本、碰撞盐），只保证单文档规范化的确定性；不用于跨管理根关联真实文件。M1 实际扫描采用根隔离的身份命名空间和持续索引。持久化 ID 不随改名重算。
 
-依赖限于 CLI、序列化、错误和 ID 生成；测试使用临时目录。未预建扫描、同步、LLM 或迁移执行的空壳模块。
+Tree 使用带 `parent_id` 的平面数组，存储顺序没有语义；验证和渲染采用迭代遍历。ID 比较和身份键索引预期为线性复杂度，另加排序、路径计算和扫描开销。所有路径都是数据，不拼接 shell 命令。
 
-## 验证
+## 测试
 
 ```bash
 cargo fmt --all
@@ -153,17 +268,16 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
 ```
 
-目前 Linux 上 42 项测试通过：7 项核心单元测试、12 项 TreeSpec、12 项 Diff、11 项 CLI 集成测试。覆盖中文/引号/转义、非法语法和路径、AST 环和悬空引用、规范化幂等、ID 冲突/继承、祖先路径变化、缺失/新增文件、示例 Diff、只读报告、拒绝覆盖和符号链接、10,000 节点宽树与 1,000 层深树。测试不需要网络或 LLM；首次下载构建依赖需要 Cargo registry 访问或本地缓存。
+Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移、全目录 dry-run 无写入、原子防覆盖、源变化、计划篡改、保护边界、循环阻断、故障日志、防重放、Git 失败重试和脚本转义。故障注入还覆盖 rename 已落盘而日志未确认的窗口。测试需要 Git，不需要 LLM 或网络服务；首次下载依赖需要 registry 访问或缓存。
 
-## 已知限制与下一步
+## 已知限制与 M3 建议
 
-M0 不包含扫描、SQLite、Git 提交、`status`/`sync`、可执行计划、`apply`、恢复、脚本导出或 LLM；也不包含 GUI、后台监听和 Agent 框架。`plan` 不接受 `--root`，因为它只读取明确指定的 Tree。当前没有大小写不敏感文件系统的冲突判定、符号链接磁盘扫描或跨平台执行保证。Tree 文件一次性读入内存。
+- 扫描/迁移目前仅提供 Linux 实现；其他平台明确报不支持。M2 保守拒绝清单中任何节点跨挂载点（包括同设备 bind mount），即使该节点本次不移动。TreeSpec 和纯比较/关联逻辑保持平台无关。
+- device/inode 仍可能复用；birthtime 可用时用于排除冲突，不可用时不能保证百分之百识别。原路径被编辑器以新 inode 替换时按新对象处理，可能产生身份结构提交。内容变化检测依赖大小和时间，不计算正文哈希。
+- 扫描不是操作系统级原子快照。锁协调 Organizer 进程，不锁定外部编辑器；最后检查后仍可能发生外部修改。执行期间应保持管理根、祖先目录及元数据稳定，不支持恶意进程并发搬走已打开父目录的场景。描述符解析、防覆盖和前后检查不会把多步迁移变成文件系统事务；元数据发布仍假定 `.organizer` 由可信用户控制。
+- 管理根改名或搬迁会被根路径/身份检查拒绝。没有大小写不敏感文件系统的完备冲突判定、管理范围变更工具、自动元数据恢复或内容备份。
+- 规划采用简单的命名空间模拟，多轮依赖搜索和后代更新未做大型树优化；执行每步前后重新扫描全部受管理节点，适合 MVP，暂不针对百万级文件或长操作链优化。
+- 不删除文件/旧目录，不跨卷复制，不实现路径循环的暂存交换、自动续跑、undo 或内容备份。受保护项目、跳过项和硬链接所在的移动子树会被保守阻断。复杂目录重排可能需拆成多份审核计划。
+- 没有 LLM、GUI、监听或复杂 Agent 框架。
 
-元数据写入检查已有符号链接并原子拒绝覆盖叶子文件，但尚不提供抵抗并发替换父目录的描述符级保证；初始化也不是事务，写入失败可能留下部分元数据文件。应在用户控制且没有并发修改的目录内使用。M2 执行器必须独立实现根目录约束、无符号链接路径解析、no-replace 原子移动及持久化操作日志，不能直接把当前元数据 I/O 代码当作迁移执行器。
-
-M1 建议按以下顺序推进：
-
-1. 实现 `scan` 的完整性标记与文件清单：跳过 `.organizer`、符号链接和特殊文件，嵌套 Git 项目作为受保护目录；权限/读取失败必须阻止自动同步。
-2. 引入 SQLite 身份索引，先匹配同路径同类型，再结合设备号/inode、元数据和历史确认唯一移动；复制分配新 ID，歧义标记 unknown/unresolved。
-3. 完整化 `init` 并实现只读 `status`、可审计的 `sync`。已有基线被手工编辑、扫描不完整或有状态冲突时拒绝覆盖；仅内容改变不产生结构提交。
-4. Git 仓库只建在 `.organizer` 内，只显式提交 `structure.tree`。覆盖新增、删除、移动、复制、不完整扫描和提交失败测试；定义现有 M0 初始化目录的升级流程。
+M3 建议按规范新增 `LlmProvider`、TreeEditor 和 FileMapper，先做 mock 测试，再接入可配置 OpenAI-compatible Provider。LLM 只产出受限 Tree 草案与已有 ID 分配；缺失/未知 ID 和 `review` 保留为未解决项，继续走当前计划校验、用户审核和执行器。文件正文默认不发送，按需上下文需有大小上限；API/网络失败不得影响手工规划。

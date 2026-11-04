@@ -1,5 +1,30 @@
 use thiserror::Error;
 
+pub type Result<T> = std::result::Result<T, OrganizerError>;
+
+#[derive(Debug, Error)]
+pub enum OrganizerError {
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Tree(#[from] TreeError),
+    #[error(transparent)]
+    Database(#[from] rusqlite::Error),
+}
+
+pub(crate) fn fail(message: impl Into<String>) -> OrganizerError {
+    OrganizerError::Message(message.into())
+}
+
+#[cfg(target_os = "linux")]
+impl From<rustix::io::Errno> for OrganizerError {
+    fn from(error: rustix::io::Errno) -> Self {
+        Self::Io(error.into())
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TreeError {
     #[error("line {line}: {message}")]

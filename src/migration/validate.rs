@@ -8,7 +8,7 @@ use crate::{
     tree::{parse_normalized_tree, render_tree},
 };
 use serde::Serialize;
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 #[derive(Debug, Serialize)]
 pub struct ValidationReport {
@@ -73,7 +73,10 @@ pub(crate) fn current(saved: &SavedState, snapshot: &ScanSnapshot) -> Result<()>
     Ok(())
 }
 
-pub(crate) fn context(root: &Path, write: bool) -> Result<(File, SavedState, ScanSnapshot)> {
+pub(crate) fn context(
+    root: &Path,
+    write: bool,
+) -> Result<(metadata::MetadataLock, SavedState, ScanSnapshot)> {
     let root = metadata::canonical_root(root)?;
     let directory = root.join(".organizer");
     metadata::layout(&directory)?;

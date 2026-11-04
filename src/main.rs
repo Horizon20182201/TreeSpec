@@ -1,12 +1,16 @@
 use std::{
     error::Error,
     fs,
-    io::{self, Write},
+    io::{self, BufRead, IsTerminal, Read, Write},
     path::{Component, Path, PathBuf},
     process::ExitCode,
 };
 
 use clap::{Parser, Subcommand};
+use organizer::llm::{
+    self, ChatOptions,
+    provider::{OpenAiCompatible, ProviderConfig},
+};
 use organizer::migration::{self, MigrationPlan};
 use organizer::sync as management;
 use organizer::tree::{
@@ -17,7 +21,7 @@ use organizer::tree::{
 #[command(
     name = "organizer",
     version,
-    about = "TreeSpec Organizer M2: reviewed plans and safe file migration"
+    about = "TreeSpec Organizer M3: LLM-assisted drafts and safe reviewed migration"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -60,6 +64,25 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Propose a complete Tree draft via an LLM; never apply or commit it.
+    Chat {
+        /// One request, or read from stdin when omitted.
+        prompt: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Restrict editable context to these existing directory IDs (repeatable).
+        #[arg(long = "scope")]
+        scope_ids: Vec<String>,
+        /// Allow a separate FileMapper call for semantic file placement.
+        #[arg(long)]
+        classify: bool,
+        /// Opt into bounded excerpts of eligible text files for FileMapper.
+        #[arg(long, requires = "classify")]
+        read_content: bool,
+        /// New draft path; defaults to .organizer/drafts/chat_UUID.tree.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Build a verified migration plan (or a document-only diff outside a managed root).
     Plan {
         /// Use this managed root; never infer a root from the input document paths.
@@ -68,6 +91,9 @@ enum Command {
         /// Explicitly compare documents without looking for a managed root.
         #[arg(long, conflicts_with = "root")]
         structural_only: bool,
+        /// After manual review, accept pending LLM decisions or an edited draft.
+        #[arg(long)]
+        acknowledge_review: bool,
         #[arg(long)]
         from: PathBuf,
         #[arg(long)]
@@ -148,6 +174,9 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
         }
         Command::Normalize { tree, base, out } => {
             let source = read_tree(&tree)?;
+            if llm::has_review_marker(&source) || llm::review_path(&tree)?.exists() {
+                return Err("LLM drafts are already normalized; edit the generated Tree directly and retain its review marker/report, then use plan --acknowledge-review after review".into());
+            }
             let parsed = match base {
                 Some(base) => {
                     parse_tree_with_base(&source, &parse_normalized_tree(&read_tree(&base)?)?)?
@@ -156,12 +185,41 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             };
             output(&render_tree(&parsed)?, out.as_deref())?;
         }
+        Command::Chat {
+            prompt,
+            root,
+            scope_ids,
+            classify,
+            read_content,
+            out,
+        } => {
+            let provider = OpenAiCompatible::new(ProviderConfig::from_env()?)?;
+            let root = management::resolve_root(root.as_deref())?;
+            let prompt = match prompt {
+                Some(prompt) => prompt,
+                None => read_prompt()?,
+            };
+            let report = llm::chat_with_provider(
+                &root,
+                &provider,
+                &ChatOptions {
+                    prompt,
+                    scope_ids,
+                    classify,
+                    read_content,
+                },
+                out.as_deref(),
+            )?;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+            return Ok(if report.unresolved.is_empty() { 0 } else { 2 });
+        }
         Command::Plan {
             from,
             to,
             out,
             root,
             structural_only,
+            acknowledge_review,
         } => {
             let old = parse_normalized_tree(&read_tree(&from)?)?;
             let managed_root = if structural_only {
@@ -171,7 +229,16 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             } else {
                 management::discover_root()?
             };
-            let new = parse_tree_with_base(&read_tree(&to)?, &old)?;
+            let source = read_tree(&to)?;
+            let new = parse_tree_with_base(&source, &old)?;
+            llm::check_review(
+                managed_root.as_deref(),
+                &to,
+                &source,
+                &old,
+                &new,
+                acknowledge_review,
+            )?;
             if let Some(root) = managed_root {
                 let plan = migration::plan(&root, &old, &new)?;
                 output(
@@ -223,6 +290,19 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
         }
     }
     Ok(0)
+}
+
+fn read_prompt() -> io::Result<String> {
+    let mut prompt = String::new();
+    let stdin = io::stdin();
+    let mut input = stdin.lock().take(llm::MAX_PROMPT_BYTES as u64 + 1);
+    if stdin.is_terminal() {
+        eprintln!("Describe the desired organization (one line):");
+        input.read_line(&mut prompt)?;
+    } else {
+        input.read_to_string(&mut prompt)?;
+    }
+    Ok(prompt)
 }
 
 fn read_tree(path: &Path) -> io::Result<String> {

@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod git;
+pub mod llm;
 mod metadata;
 pub mod migration;
 pub mod scan;

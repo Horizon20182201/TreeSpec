@@ -99,7 +99,20 @@ pub(crate) fn write_snapshot(path: &Path, expected: Option<&str>, contents: &str
     Ok(())
 }
 
-pub(crate) fn lock(metadata: &Path, write: bool) -> Result<File> {
+pub(crate) struct MetadataLock {
+    file: File,
+}
+
+impl Drop for MetadataLock {
+    fn drop(&mut self) {
+        // Explicitly unlock the open file description. Closing this descriptor
+        // alone can briefly retain a lock in another thread's forked child
+        // before CLOEXEC runs, making a subsequent chat recheck spuriously busy.
+        let _ = self.file.unlock();
+    }
+}
+
+pub(crate) fn lock(metadata: &Path, write: bool) -> Result<MetadataLock> {
     let path = metadata.join("state/lock");
     plain_file(&path)?;
     let file = fs::OpenOptions::new().read(true).write(write).open(path)?;
@@ -113,7 +126,7 @@ pub(crate) fn lock(metadata: &Path, write: bool) -> Result<File> {
             "organizer metadata is busy or cannot be locked: {error}"
         ))
     })?;
-    Ok(file)
+    Ok(MetadataLock { file })
 }
 
 pub(crate) fn layout(metadata: &Path) -> Result<()> {
@@ -181,4 +194,21 @@ pub(crate) fn log(metadata: &Path, message: &str) -> Result<()> {
     writeln!(file, "{message}")?;
     file.sync_all()?;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn dropping_guard_unlocks_even_with_an_inherited_descriptor() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::create_dir(temporary.path().join("state")).unwrap();
+        fs::write(temporary.path().join("state/lock"), "").unwrap();
+        let guard = lock(temporary.path(), true).unwrap();
+        let inherited = guard.file.try_clone().unwrap();
+        assert!(lock(temporary.path(), true).is_err());
+        drop(guard);
+        let _next = lock(temporary.path(), true).unwrap();
+        drop(inherited);
+    }
 }

@@ -1,8 +1,83 @@
-# TreeSpec Organizer — M2
+# TreeSpec Organizer — M3
 
-基于 Rust 的本地文件结构管理 CLI。已完成 **M0：TreeSpec v1 / ID Diff**、**M1：扫描 / 身份索引 / Git 结构同步**、**M2：安全迁移规划与执行**，无需 LLM Key。
+基于 Rust 的本地文件结构管理 CLI。已完成 **M0：TreeSpec v1 / ID Diff**、**M1：扫描 / 身份索引 / Git 结构同步**、**M2：安全迁移规划与执行**、**M3：LLM 结构草案与语义分类**。手工规划、执行和默认测试不需要 LLM Key。
 
 需求见 [开发规范](docs/TreeSpec_Organizer_MVP_Development_Spec.md)。工具只管理结构元数据，不把用户文件正文写进 Git。`sync` 记录已经发生的磁盘变化；`plan` 根据稳定 ID 规划路径变更，`apply --yes` 才执行真实移动。
+
+## M3：自然语言生成草案
+
+`chat` 每次接收一个自然语言请求，生成完整 Tree 和一份审核报告；不修改已应用的基线、身份数据库、Git 或真实目录。程序使用可配置的 [Chat Completions 接口](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)，端点需支持非流式响应、`response_format: {"type":"json_object"}` 与 `max_completion_tokens`。JSON 模式不保证业务 Schema，程序另做严格的字段、ID、范围和路径校验，参见 [JSON 模式说明](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=chat)。
+
+```bash
+cargo build --locked
+export PATH="$PWD/target/debug:$PATH"
+export ORGANIZER_LLM_BASE_URL="https://your-provider.example/v1"
+export ORGANIZER_LLM_MODEL="your-json-capable-model"
+export ORGANIZER_LLM_API_KEY="your-api-key"
+
+# Workspace 必须先 init；有外部变化时先审核并 sync
+organizer chat --root ./Workspace --classify \
+  --out ./Workspace/.organizer/drafts/new.tree \
+  "在 Research/Papers 下建立 C2Rust 和 Security，将已有论文按主题归类"
+
+# 阅读 new.tree 和 new.tree.review.json 后再继续
+organizer plan --root ./Workspace \
+  --from ./Workspace/.organizer/structure.tree \
+  --to ./Workspace/.organizer/drafts/new.tree \
+  --out ./Workspace/.organizer/plans/migration.json
+organizer apply ./Workspace/.organizer/plans/migration.json --root ./Workspace --dry-run
+organizer apply ./Workspace/.organizer/plans/migration.json --root ./Workspace --yes
+```
+
+不指定 `--out` 时生成 `.organizer/drafts/chat_UUID.tree`，同目录配套生成 `chat_UUID.tree.review.json`。指定的两个输出必须不存在；位于受管理根内部时，只能写到 `.organizer/drafts`，也可以选择根目录之外的已有目录。不提供请求参数时，从终端读一行，或从 stdin 读入请求（最多 8 KiB）。无 API 配置时明确提示复制基线到草案手工编辑，原有 `plan`/`apply` 不受影响。
+
+| 选项 | 行为 |
+| --- | --- |
+| `--scope DIRECTORY_ID` | 只向 LLM 提供指定子树和必要的只读祖先；可重复，省略时为当前根的安全候选节点 |
+| `--classify` | 明确允许 FileMapper 做语义归属；未开启时模型不能升级为文件分类 |
+| `--read-content` | 需同时指定 `--classify`；允许读取并发送有限文本片段，默认不读取正文 |
+| `--out PATH` | 新草案路径；审核报告命名为 `PATH.review.json` |
+
+目录 ID 可从 `.organizer/structure.tree` 的 `@ID` 取得。单次上下文最多 512 个节点（包含只读祖先），单次分类最多 256 个文件；超限要求缩小 `--scope`，不会静默截断候选清单。
+
+TreeEditor 接受版本化白名单：新增目录、目录改名/移动、设置说明、移除空目录声明。目录 ID 由工具分配；可以在 `add_directory` 中声明 `$alias` 形式的 `local_ref`，供后续编辑的 `parent_id`/`id` 引用，从而一次创建多级目录。`rename_node`/`move_node` 仅允许目录，文件归属交给 FileMapper；文件改名继续通过手工 Tree 完成。受保护、敏感、跳过项所在的目录不能被整体搬移。移除旧空目录声明仍受 M2 限制：草案会显示未解决项，不实际删除目录。
+
+FileMapper 只接收用户范围内、由 TreeEditor 指定的已有文件及程序给出的候选目录，使用 `place` / `keep` / `review`。`scope_dir_ids` 为空表示用户选定的全部安全范围；非空必须引用该范围内已有目录。新增目录的真实 ID 会在调用 Mapper 前提供。`keep` / `review` 保留文件名和父 ID（目录整体改名引起的继承路径变化仍在草案中展示）；遗漏的文件自动变成 `review`，重复/未知文件或越界目标直接拒绝。所有旧文件 ID 必须完整保留。
+
+管理根没有节点 ID；`place` 目前只支持显式目录节点，移回管理根需手工编辑草案。TreeEditor 中省略 `parent_id` 与显式 `null` 都表示管理根，省略 `description` 与 `null` 都表示无说明；子树范围不允许根级编辑。
+
+审核报告记录编辑数、分配理由、未解决项、读取字节数和 Tree 摘要，不保存完整请求、原始响应或密钥。草案内有关联报告的注释标记。出现 `review`、遗漏、M2 规划冲突时，`chat` 写出草案并返回 `2`；普通失败不发布草案。`plan` 对带有未解决项或经过手工编辑的草案要求明确审核：
+
+```bash
+# 检查/编辑完整草案与报告后，显式接受当前目标；未分类文件保持原有归属
+organizer plan --root ./Workspace \
+  --from ./Workspace/.organizer/structure.tree \
+  --to ./Workspace/.organizer/drafts/new.tree \
+  --acknowledge-review --out ./Workspace/.organizer/plans/reviewed.json
+```
+
+`--acknowledge-review` 只确认语义审核，不绕过 M2 的路径、身份、源文件或冲突检查。缺失报告、基线不符、根目录不符仍会拒绝。生成的草案已规范化，`normalize` 会拒绝再次处理它，以免丢失审核标记。编辑时保留草案/报告配对；报告与注释是本地工作流约束，不是数字签名或对恶意本地修改的授权系统。
+
+## LLM 隐私与调用边界
+
+| 环境变量 | 默认与用途 |
+| --- | --- |
+| `ORGANIZER_LLM_BASE_URL` | 默认 `https://api.openai.com/v1`；填写 API 基址，程序追加 `/chat/completions` |
+| `ORGANIZER_LLM_MODEL` | 必填；不自动选择模型 |
+| `ORGANIZER_LLM_API_KEY` | 远程端点必填；loopback 服务允许不设置 |
+| `ORGANIZER_LLM_DISABLED=1` | 禁止 `chat`，保留手工工作流 |
+| `ORGANIZER_LLM_LOCAL_ONLY=1` | 只允许 loopback IP 或 `localhost`；不通过代理发送本地请求 |
+| `ORGANIZER_LLM_NO_CONTENT=1` | 禁止 `--read-content`；不会被命令行覆盖 |
+
+三个开关均只接受 `0` / `1`，省略视为 `0`。远程端点要求 HTTPS，仅 loopback 允许 HTTP；拒绝 URL 用户信息、query 和 fragment，禁止 HTTP 重定向。API Key 只进入敏感 Authorization header，不进入请求 JSON、Git、审核报告或错误消息。HTTP 错误只显示状态码，网络错误不回显 URL/正文。
+
+默认仅发送安全候选的名称、相对路径、ID、说明和必要祖先；不发送绝对管理根、device/inode 或文件正文。`.env` / `.env.*`、常见 SSH 私钥、`.pem/.key/.p12/.pfx/.keystore`、`.ssh/.aws/.gnupg/.kube` 及 credentials 节点被排除。嵌套 Git 项目、符号链接和特殊文件也不会进入 LLM 文件候选。名称和说明本身仍属于发送给已配置服务的元数据；使用 `LOCAL_ONLY` 或 `DISABLED` 可禁止云端发送。
+
+开启正文片段后，仅对 FileMapper 的选中文件读取支持的文本扩展名（如 txt/md/json/toml/yaml/源码），单文件最多 4 KiB、整次最多 64 KiB。使用 Linux 根目录描述符、禁止符号链接/挂载点绕行、核验文件身份并跳过硬链接；读前后身份变化或权限错误停止。二进制、无效 UTF-8、PDF 和识别出的私钥块退回名称上下文；暂未实现 PDF 标题提取。内建名称过滤和私钥标记不是完整的秘密检测器，任意文本仍可能包含敏感信息，`--read-content` 是明确发送这些片段的选择。
+
+调用限制：请求 JSON 最大 256 KiB，响应和审核报告最大 512 KiB；单次 HTTP 超时 30 秒，连接超时 10 秒，输出预算 4096 tokens。JSON/字段形状不合法最多重试一次；拒答、截断、工具调用、HTTP/网络失败和非法 ID/路径不自动重试。一次 `chat` 最多两次 TreeEditor、两次 FileMapper 调用；纯结构编辑不调用 Mapper。文件中的文字始终作为不可信数据，不能改变系统规则或获得执行权限。
+
+HTTP 等待期间释放元数据锁，发布草案前重新加锁并核对基线与磁盘；变化后要求重试。草案和报告先后以新文件发布，先写报告：若后一步 I/O 失败，可能留下孤立报告，但不会静默发布缺少报告的有效草案。此时保留检查结果并使用新输出路径重试。
 
 ## 完整 M2 流程
 
@@ -78,15 +153,17 @@ cargo run -- plan --structural-only --from examples/old.tree --to examples/new.t
 | `organizer history [--root PATH]` | 查看本地结构提交历史 |
 | `organizer validate TREE` | 只读校验 Tree；允许缺失 ID，不回写 |
 | `organizer normalize TREE [--base OLD] [--out PATH]` | 补齐 ID、规范排序；默认 stdout |
+| `organizer chat [REQUEST] [--root PATH] [--scope ID] [--classify] [--read-content] [--out PATH]` | 生成完整草案及审核报告；不执行文件操作 |
 | `organizer plan --from OLD --to NEW [--root PATH] [--out PATH]` | 检查基线与磁盘，生成含前置条件的迁移计划；无管理根时保留结构 Diff |
 | `organizer plan --structural-only --from OLD --to NEW [--out PATH]` | 显式仅比较文档，不查找管理根或扫描磁盘 |
+| `organizer plan ... --acknowledge-review` | 明确接受生成草案的待审核项或手工修改；仍执行全部 M2 校验 |
 | `organizer apply PLAN [--root PATH] [--dry-run \| --yes]` | 默认只读预览；`--yes` 才执行，两个选项互斥 |
 | `organizer export-script PLAN --out SCRIPT` | 生成正确 shell 转义的 CLI 包装脚本；不嵌入文件操作 |
 | `organizer recover RUN_ID [--root PATH] [--finish-git]` | 默认只读检查；可重试已完成迁移的 Git 记录，绝不重放文件移动 |
 
 未指定根目录时，从当前目录向上查找最近的 `.organizer`。`plan` 找不到管理根时保留 M0 的独立文档比较能力。`apply` 的根由当前目录或显式 `--root` 选择，必须与计划完全一致；不会从计划路径或内容自动切换根。`--root` 与 `--structural-only` 互斥。
 
-退出码：正常完成为 `0`；I/O、解析、验证、执行失败或未完成迁移阻断命令时为 `1`；`status` 能生成报告且有不完整扫描、冲突、未知身份或待提交 Git 时为 `2`；`plan` 有未解决项也为 `2`。Clap 参数错误使用 `2` 并输出用法。普通磁盘变化本身不会使 `status` 失败。计划生成成功后，执行时仍须重新验证。
+退出码：正常完成为 `0`；I/O、解析、验证、执行失败或未完成迁移阻断命令时为 `1`；`status` 能生成报告且有不完整扫描、冲突、未知身份或待提交 Git 时为 `2`；`plan` 有未解决项、`chat` 草案有待审核项时也为 `2`。未确认的 LLM 审核标记会让 `plan` 返回 `1`，不输出迁移计划。Clap 参数错误使用 `2` 并输出用法。普通磁盘变化本身不会使 `status` 失败。计划生成成功后，执行时仍须重新验证。
 
 `normalize` / `plan --out` / `export-script --out` 只创建新输出，不覆盖已有文件或输入 Tree。输出父目录必须已存在；根目录与元数据输出路径拒绝 `..` 和已有符号链接祖先。不要用 shell 重定向覆盖输入文件。将草案、计划放在 `.organizer` 内；写到受管理用户目录会被扫描为新增文件，使旧计划过期。
 
@@ -242,6 +319,13 @@ src/
 ├── storage.rs       # SQLite 身份/缓存事务与保存状态
 ├── sync.rs          # init、status、sync、基线预检与重试
 ├── git.rs           # 专用仓库、单文件快照、历史
+├── llm/
+│   ├── mod.rs       # chat 编排、全量草案、摘要与审核报告
+│   ├── provider.rs  # 可 Mock 同步接口、HTTP/隐私策略、有限重试
+│   ├── tree_editor.rs # 目录结构白名单、生成 ID、局部引用
+│   ├── file_mapper.rs # place/keep/review、候选 ID、完整性
+│   ├── context.rs   # 子树范围、敏感候选、有限文本读取
+│   └── schemas/     # TreeEditor / FileMapper 的 JSON Schema v1
 ├── migration/
 │   ├── plan.rs      # 类型、摘要、确定性命名空间模拟与排序
 │   ├── validate.rs  # 严格 JSON/Tree、基线和扫描前置条件验证
@@ -254,6 +338,8 @@ src/
 Tree 公共 API 从 `organizer::tree` 导出：`parse_tree`、`parse_normalized_tree`、`parse_tree_with_base`、`validate_tree`、`render_tree`、`relative_paths`、`diff`、`compare_trees`。`scan::scan` 返回带 `complete`、warnings、errors 的清单，`scan::identity::reconcile` 是可独立测试的纯匹配逻辑；`storage::load` 只读加载保存状态。
 
 迁移 API：`migration::build_plan(&PlanningContext)` 是纯规划逻辑；`migration::plan(root, old, target)` 负责只读磁盘上下文；`validate_plan` 只读验证；`apply_plan` 执行（库调用方负责取得用户确认）；`journal::recover` 检查或仅补齐 Git。JSON 使用白名单枚举及 `deny_unknown_fields`，拒绝陌生操作和字段。
+
+LLM API：`LlmProvider::complete_json` 返回结构化值，`chat_with_provider` 接受任意实现，便于注入 Mock。当前 CLI 每次串行完成一份草案，因此采用同步 trait 与 reqwest blocking，不引入异步业务运行时、工具调用或 Agent 框架。`llm::check_review` 由 CLI 在解析生成的文档时调用；直接使用 AST 的库调用方须自行承担用户审核与报告检查，核心 M2 仍独立验证迁移安全。
 
 独立 Tree 文档的首次 ID 分配仍使用 UUID v5（类型、路径、版本、碰撞盐），只保证单文档规范化的确定性；不用于跨管理根关联真实文件。M1 实际扫描采用根隔离的身份命名空间和持续索引。持久化 ID 不随改名重算。
 
@@ -270,7 +356,17 @@ cargo test --locked
 
 Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移、全目录 dry-run 无写入、原子防覆盖、源变化、计划篡改、保护边界、循环阻断、故障日志、防重放、Git 失败重试和脚本转义。故障注入还覆盖 rename 已落盘而日志未确认的窗口。测试需要 Git，不需要 LLM 或网络服务；首次下载依赖需要 registry 访问或缓存。
 
-## 已知限制与 M3 建议
+[M3 Mock 测试](tests/llm_mock.rs) 覆盖两阶段语义分类到真实迁移的闭环、文件 ID/内容保留、有限重试、`place/keep/review`、漏分、越界和非法操作、同名冲突、只读祖先、敏感候选、内容上限、正文读取前的文件替换/符号链接、API 等待期间磁盘变化、审核标记、隐私开关以及无 API 的手工回退。Provider 单元测试覆盖 HTTP 请求编码、响应解码、截断/工具调用拒绝和密钥脱敏。
+
+另有一个默认忽略的 [HTTP 集成测试](tests/llm_http.rs)，仅在允许监听 loopback 端口的环境中运行，不需要真实服务或 Key：
+
+```bash
+cargo test --locked --test llm_http -- --ignored
+```
+
+当前开发沙箱禁止绑定 TCP 端口，尚未在此环境验证该测试或真实模型服务；这与默认离线测试通过的结果分开报告。
+
+## 已知限制与后续建议
 
 - 扫描/迁移目前仅提供 Linux 实现；其他平台明确报不支持。M2 保守拒绝清单中任何节点跨挂载点（包括同设备 bind mount），即使该节点本次不移动。TreeSpec 和纯比较/关联逻辑保持平台无关。
 - device/inode 仍可能复用；birthtime 可用时用于排除冲突，不可用时不能保证百分之百识别。原路径被编辑器以新 inode 替换时按新对象处理，可能产生身份结构提交。内容变化检测依赖大小和时间，不计算正文哈希。
@@ -278,6 +374,7 @@ Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移�
 - 管理根改名或搬迁会被根路径/身份检查拒绝。没有大小写不敏感文件系统的完备冲突判定、管理范围变更工具、自动元数据恢复或内容备份。
 - 规划采用简单的命名空间模拟，多轮依赖搜索和后代更新未做大型树优化；执行每步前后重新扫描全部受管理节点，适合 MVP，暂不针对百万级文件或长操作链优化。
 - 不删除文件/旧目录，不跨卷复制，不实现路径循环的暂存交换、自动续跑、undo 或内容备份。受保护项目、跳过项和硬链接所在的移动子树会被保守阻断。复杂目录重排可能需拆成多份审核计划。
-- 没有 LLM、GUI、监听或复杂 Agent 框架。
+- M3 是有界的单次草案生成，不保留多轮对话、不做自动大树分批、PDF 提取、语义缓存或模型选择。只支持上述 Chat Completions 子集；服务不兼容时明确报错，用户可继续手工编辑。
+- 没有 GUI、监听或复杂 Agent 框架。
 
-M3 建议按规范新增 `LlmProvider`、TreeEditor 和 FileMapper，先做 mock 测试，再接入可配置 OpenAI-compatible Provider。LLM 只产出受限 Tree 草案与已有 ID 分配；缺失/未知 ID 和 `review` 保留为未解决项，继续走当前计划校验、用户审核和执行器。文件正文默认不发送，按需上下文需有大小上限；API/网络失败不得影响手工规划。
+后续建议先在实际服务上验证协议兼容性，再按需求增加显式用户授权的 PDF 标题提取、语义批处理和逐项审核。文件操作恢复、反向移动计划与跨平台能力应继续独立于 LLM 模块推进；所有新能力仍通过当前审核、身份校验和防覆盖执行器。

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "edits", "migration_intent"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "edits": {"type": "array", "maxItems": 64, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["op", "name"], "properties": {
+        "op": {"const": "add_directory"}, "parent_id": {"type": ["string", "null"]}, "name": {"type": "string", "minLength": 1, "maxLength": 255}, "description": {"type": ["string", "null"]}, "local_ref": {"type": ["string", "null"], "description": "Optional $alias for later edits; actual stable ID is assigned by the tool"}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["op", "id", "name"], "properties": {
+        "op": {"const": "rename_node"}, "id": {"type": "string"}, "name": {"type": "string", "minLength": 1, "maxLength": 255}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["op", "id"], "properties": {
+        "op": {"const": "move_node"}, "id": {"type": "string"}, "parent_id": {"type": ["string", "null"]}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["op", "id"], "properties": {
+        "op": {"const": "set_description"}, "id": {"type": "string"}, "description": {"type": ["string", "null"]}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["op", "id"], "properties": {
+        "op": {"const": "remove_empty_directory_declaration"}, "id": {"type": "string"}
+      }}
+    ]}},
+    "migration_intent": {"type": "object", "additionalProperties": false, "required": ["kind", "scope_dir_ids"], "properties": {
+      "kind": {"enum": ["structure_only", "redistribute_existing_files"]},
+      "scope_dir_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "description": "Only supplied existing editable directory IDs; empty means the user-selected scope when classification is allowed"}
+    }}
+  }
+}

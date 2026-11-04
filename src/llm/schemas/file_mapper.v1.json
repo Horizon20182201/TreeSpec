@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["schema_version", "assignments"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "assignments": {"type": "array", "maxItems": 256, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["file_id", "decision", "target_dir_id", "reason"], "properties": {
+        "file_id": {"type": "string"}, "decision": {"const": "place"}, "target_dir_id": {"type": "string"}, "reason": {"type": "string", "maxLength": 1024}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["file_id", "decision", "reason"], "properties": {
+        "file_id": {"type": "string"}, "decision": {"const": "keep"}, "reason": {"type": "string", "maxLength": 1024}
+      }},
+      {"type": "object", "additionalProperties": false, "required": ["file_id", "decision", "reason"], "properties": {
+        "file_id": {"type": "string"}, "decision": {"const": "review"}, "reason": {"type": "string", "maxLength": 1024}
+      }}
+    ]}}
+  }
+}

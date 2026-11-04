@@ -193,30 +193,17 @@ pub(crate) fn read_excerpt(
     {
         return Ok(None);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
-        use std::{fs::File, io::Read};
-        let root = File::from(openat2(
-            rustix::fs::CWD,
-            &saved.root,
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-            ResolveFlags::NO_SYMLINKS,
-        )?);
+        use std::io::Read;
+        let root = crate::fsops::open_root(&saved.root)?;
         let root_stamp = FileStamp::from_metadata(&root.metadata()?);
         if root_stamp.platform_file_key != saved.root_stamp.platform_file_key
             || root_stamp.birthtime != saved.root_stamp.birthtime
         {
             return Err(fail("root changed before reading LLM context"));
         }
-        let mut file = File::from(openat2(
-            &root,
-            path.as_str(),
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
-        )?);
+        let mut file = crate::fsops::open_read_beneath(&root, path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() || FileStamp::from_metadata(&metadata) != record.entry.stamp {
             return Err(fail("context source changed; sync and retry chat"));
@@ -246,8 +233,8 @@ pub(crate) fn read_excerpt(
         }
         Ok(Some(text.into()))
     }
-    #[cfg(not(target_os = "linux"))]
-    Err(fail("safe content context requires Linux"))
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    Err(fail("safe content context requires Linux or macOS"))
 }
 
 pub(crate) fn validate_target(tree: &TreeSpec) -> Result<()> {

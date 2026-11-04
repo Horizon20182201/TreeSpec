@@ -137,7 +137,7 @@ fn dirty_baseline_and_drafts_block_sync() {
     assert!(!ids(root).contains_key("new"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn skips_symlinks_special_files_and_nested_repositories() {
     use std::os::unix::fs::symlink;
@@ -147,7 +147,13 @@ fn skips_symlinks_special_files_and_nested_repositories() {
     fs::create_dir(root.join("project/.git")).unwrap();
     fs::write(root.join("project/secret"), "not inventoried").unwrap();
     symlink(root.join("project"), root.join("link")).unwrap();
-    rustix::fs::mkfifoat(rustix::fs::CWD, root.join("pipe"), rustix::fs::Mode::RUSR).unwrap();
+    assert!(
+        Command::new("mkfifo")
+            .arg(root.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
     success(root, &["init"]);
     let tree = ids(root);
     assert_eq!(tree.len(), 1);
@@ -393,23 +399,26 @@ fn incomplete_scan_does_not_infer_deletions_or_update_baseline() {
 #[cfg(unix)]
 #[test]
 fn unrepresentable_names_and_replaced_symlinks_fail_closed() {
-    use std::{
-        ffi::OsString,
-        os::unix::{ffi::OsStringExt, fs::symlink},
-    };
+    use std::os::unix::fs::symlink;
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     fs::write(root.join("file"), "keep").unwrap();
     success(root, &["init"]);
-    let invalid = root.join(OsString::from_vec(vec![0xff]));
-    fs::write(&invalid, "invalid name").unwrap();
-    let output = run(root, &["status"]);
-    assert_eq!(output.status.code(), Some(2));
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["scan_complete"], false);
-    assert!(report["missing"].as_array().unwrap().is_empty());
-    assert!(!run(root, &["sync"]).status.success());
-    fs::remove_file(invalid).unwrap();
+    // APFS rejects non-UTF-8 names at the syscall layer, so this half only
+    // applies to filesystems that can store such names (for example ext4).
+    #[cfg(not(target_os = "macos"))]
+    {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+        let invalid = root.join(OsString::from_vec(vec![0xff]));
+        fs::write(&invalid, "invalid name").unwrap();
+        let output = run(root, &["status"]);
+        assert_eq!(output.status.code(), Some(2));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["scan_complete"], false);
+        assert!(report["missing"].as_array().unwrap().is_empty());
+        assert!(!run(root, &["sync"]).status.success());
+        fs::remove_file(invalid).unwrap();
+    }
     fs::remove_file(root.join("file")).unwrap();
     symlink("/nonexistent", root.join("file")).unwrap();
     assert!(!run(root, &["sync"]).status.success());

@@ -89,8 +89,9 @@ pub struct ScanSnapshot {
     pub errors: Vec<ScanIssue>,
 }
 
-/// Enumerates metadata only. Linux traversal uses directory descriptors and
-/// O_NOFOLLOW, so replacing an entry with a symlink cannot redirect recursion.
+/// Enumerates metadata only. Traversal stays anchored to directory descriptors
+/// and never follows symlinks, so replacing an entry with a symlink cannot
+/// redirect recursion.
 pub fn scan(root: &Path) -> Result<ScanSnapshot> {
     let root = crate::metadata::canonical_root(root)?;
     let mut snapshot = ScanSnapshot {
@@ -101,11 +102,11 @@ pub fn scan(root: &Path) -> Result<ScanSnapshot> {
         warnings: vec![],
         errors: vec![],
     };
-    #[cfg(target_os = "linux")]
-    linux::walk(&mut snapshot)?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    native::walk(&mut snapshot)?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     return Err(fail(
-        "M1 scanning currently requires Linux descriptor-relative traversal",
+        "scanning requires descriptor-relative traversal on Linux or macOS",
     ));
     snapshot.entries.sort_by(|a, b| a.path.cmp(&b.path));
     snapshot.warnings.sort_by(|a, b| a.path.cmp(&b.path));
@@ -113,17 +114,21 @@ pub fn scan(root: &Path) -> Result<ScanSnapshot> {
     Ok(snapshot)
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native {
     use super::*;
-    use rustix::fs::{Dir, Mode, OFlags, open, openat};
+    use crate::fsops;
+    use rustix::fs::Dir;
     use std::{ffi::OsStr, fs::File, os::unix::ffi::OsStrExt};
 
-    const DIRECTORY: OFlags = OFlags::RDONLY
-        .union(OFlags::DIRECTORY)
-        .union(OFlags::NOFOLLOW)
-        .union(OFlags::CLOEXEC);
+    #[cfg(target_os = "linux")]
+    use rustix::fs::{Mode, OFlags, openat};
+
+    #[cfg(target_os = "linux")]
     const METADATA: OFlags = OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
+
+    #[cfg(target_os = "macos")]
+    use rustix::fs::{AtFlags, FileType, statat};
 
     struct Frame {
         file: File,
@@ -133,7 +138,7 @@ mod linux {
     }
 
     pub(super) fn walk(snapshot: &mut ScanSnapshot) -> Result<()> {
-        let root = File::from(open(&snapshot.root, DIRECTORY, Mode::empty())?);
+        let root = fsops::open_root(&snapshot.root)?;
         let mut stack = vec![frame(root, String::new())?];
         while let Some(parent) = stack.last_mut() {
             let entry = match parent.entries.next() {
@@ -226,6 +231,7 @@ mod linux {
         })
     }
 
+    #[cfg(target_os = "linux")]
     fn inspect(
         parent: &File,
         name: &OsStr,
@@ -240,21 +246,12 @@ mod linux {
         } else {
             return Ok((None, None));
         };
-        validate_tree(&TreeSpec {
-            version: 1,
-            nodes: vec![TreeNode {
-                id: "check".into(),
-                parent_id: None,
-                name: name.to_str().ok_or_else(|| fail("non-UTF-8 name"))?.into(),
-                kind,
-                description: None,
-            }],
-        })?;
+        validate_name(name, kind)?;
         let stamp = FileStamp::from_metadata(&meta);
         let mut protected = false;
         let mut child = None;
         if kind == NodeKind::Directory {
-            let file = File::from(openat(parent, name, DIRECTORY, Mode::empty())?);
+            let file = fsops::open_child_directory(parent, name)?;
             if FileStamp::from_metadata(&file.metadata()?) != stamp {
                 return Err(fail("directory replaced during scan"));
             }
@@ -276,6 +273,64 @@ mod linux {
             }),
             child,
         ))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn inspect(
+        parent: &File,
+        name: &OsStr,
+        path: &str,
+    ) -> Result<(Option<ScanEntry>, Option<Frame>)> {
+        let stat = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        let kind = match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => NodeKind::Directory,
+            FileType::RegularFile => NodeKind::File,
+            _ => return Ok((None, None)),
+        };
+        validate_name(name, kind)?;
+        let mut stamp = fsops::stamp_from_stat(&stat);
+        let mut protected = false;
+        let mut child = None;
+        if kind == NodeKind::Directory {
+            let file = fsops::open_child_directory(parent, name)?;
+            let actual = FileStamp::from_metadata(&file.metadata()?);
+            if !fsops::same_identity(&stamp, &actual) {
+                return Err(fail("directory replaced during scan"));
+            }
+            // Prefer the descriptor metadata so directory stamps use exactly
+            // the same representation as the rest of the program.
+            stamp = actual;
+            match statat(&file, ".git", AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(_) => protected = true,
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(error.into()),
+            }
+            if !protected {
+                child = Some(frame(file, path.to_owned())?);
+            }
+        }
+        Ok((
+            Some(ScanEntry {
+                path: path.to_owned(),
+                kind,
+                stamp,
+                protected,
+            }),
+            child,
+        ))
+    }
+
+    fn validate_name(name: &OsStr, kind: NodeKind) -> Result<()> {
+        Ok(validate_tree(&TreeSpec {
+            version: 1,
+            nodes: vec![TreeNode {
+                id: "check".into(),
+                parent_id: None,
+                name: name.to_str().ok_or_else(|| fail("non-UTF-8 name"))?.into(),
+                kind,
+                description: None,
+            }],
+        })?)
     }
 
     fn issue(path: &str, error: impl std::fmt::Display) -> ScanIssue {

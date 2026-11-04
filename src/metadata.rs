@@ -13,15 +13,45 @@ pub(crate) fn canonical_root(path: &Path) -> Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(path)
     };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        if component == Component::ParentDir {
-            return Err(fail("root and metadata paths must not contain .."));
-        }
-        current.push(component);
-        plain_directory(&current)?;
+    if absolute
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return Err(fail("root and metadata paths must not contain .."));
     }
-    let canonical = absolute.canonicalize()?;
+    #[cfg(not(target_os = "macos"))]
+    let canonical = {
+        let mut current = PathBuf::new();
+        for component in absolute.components() {
+            current.push(component);
+            plain_directory(&current)?;
+        }
+        absolute.canonicalize()?
+    };
+    #[cfg(target_os = "macos")]
+    let canonical = {
+        // macOS exposes system paths such as `/var` through root-level
+        // aliases. A manifest symlink is still rejected as the root itself;
+        // otherwise resolve the path and record only the canonical location,
+        // so later lookups and identity checks never depend on the alias.
+        // Normalize trailing separators first: `lstat("link/")` follows the
+        // final symlink, while the component form keeps it visible.
+        let requested: PathBuf = absolute.components().collect();
+        let metadata = fs::symlink_metadata(&requested)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(fail(format!(
+                "not a plain directory: {}",
+                requested.display()
+            )));
+        }
+        let canonical = absolute.canonicalize()?;
+        let mut current = PathBuf::new();
+        for component in canonical.components() {
+            current.push(component);
+            plain_directory(&current)?;
+        }
+        canonical
+    };
     if canonical.to_str().is_none() {
         return Err(fail("management root must be UTF-8"));
     }
@@ -196,7 +226,7 @@ pub(crate) fn log(metadata: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]

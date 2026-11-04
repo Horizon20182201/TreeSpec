@@ -253,6 +253,7 @@ fn metadata_writes_reject_symlinks_including_dangling_links() {
     fs::write(root.join("input.tree"), "!tree 1\n").unwrap();
     symlink(root.join("real"), root.join("link")).unwrap();
     assert!(!run(root, &["init", "--root", "link"]).status.success());
+    assert!(!run(root, &["init", "--root", "link/"]).status.success());
     assert!(
         !run(root, &["normalize", "input.tree", "--out", "link/out.tree"])
             .status

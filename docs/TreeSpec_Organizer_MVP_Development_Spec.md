@@ -10,7 +10,7 @@
 
 1. **先完成可运行的非 LLM 闭环**：TreeSpec 解析/序列化 → 扫描与同步 → 结构 Diff → 迁移计划 → dry-run → 安全执行 → Git 结构快照。
 2. 再实现可插拔的 LLM 接口：自然语言编辑树、语义分类文件；LLM **只能返回结构化建议**，不能直接运行命令、删除文件或编辑真实目录。
-3. 采用 Rust workspace 或单 crate 模块化项目，优先实现 Linux；核心逻辑保持跨平台，不做 GUI、后台 daemon 或文件监听。
+3. 采用 Rust workspace 或单 crate 模块化项目，优先实现 Linux 与 macOS；核心逻辑保持跨平台，不做 GUI、后台 daemon 或文件监听。
 4. 所有真实文件操作必须具有冲突检查、路径安全校验、禁止覆盖、执行日志。**永不因 Tree 差异自动删除非空文件/目录。**
 5. 先写单元/集成测试；每个阶段完成后能通过 `cargo test`，并用 `cargo fmt`、`cargo clippy` 检查。
 6. 有歧义时采取保守行为：报告 `unresolved` 或停止操作，**不能猜测文件的去向，更不能静默丢弃文件**。
@@ -461,7 +461,7 @@ organizer apply "/absolute/path/to/migration.json"
 
 - 操作只能在根目录内；不允许路径穿越、绝对路径逃逸、符号链接目标绕行。
 - 不能把目录移动进自身后代。
-- 同卷迁移优先使用 rename。**注意 Unix `rename` 可能覆盖已有目标：仅“先检查目标不存在”不足以消除并发竞态。Linux MVP 应使用平台提供的 no-replace 原子重命名能力；做不到时 fail closed，不允许潜在覆盖。**
+- 同卷迁移优先使用 rename。**注意 Unix `rename` 可能覆盖已有目标：仅“先检查目标不存在”不足以消除并发竞态。Linux/macOS MVP 应使用平台提供的 no-replace 原子重命名能力（`RENAME_NOREPLACE` / `RENAME_EXCL`）；做不到时 fail closed，不允许潜在覆盖。**
 - 不触碰 `.organizer/`、嵌套 Git 项目的内部内容、系统特殊文件。
 - 不跨文件系统迁移，不做隐式 copy+delete。
 - 冲突、权限失败、文件已变化、日志状态不一致时停止，不强行修复。

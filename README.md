@@ -11,7 +11,7 @@ TreeSpec Organizer 是一个基于 Rust 的文件结构管理命令行工具。�
 
 ## 安装
 
-目前支持 **Linux**，需要内核 5.6+、支持原子防覆盖移动的文件系统，以及 Rust、Git 和 C 编译器。已在 Rust 1.95 上验证构建，SQLite 无需单独安装。
+目前支持 **Linux** 和 **macOS**。Linux 需要内核 5.6+，macOS 需要 10.12+；两个平台都要求支持原子防覆盖移动的文件系统，以及 Rust 1.95+、Git 和 C 编译器。已在 macOS 26.6（Apple Silicon）与 Rust 1.99 上验证构建，SQLite 无需单独安装。
 
 下载或克隆本仓库，进入项目目录后安装：
 
@@ -20,7 +20,7 @@ cargo install --path . --locked
 organizer --help
 ```
 
-首次构建需要下载依赖。若提示找不到 `organizer`，将 Cargo 的安装目录加入 `PATH`；默认目录为 `$HOME/.cargo/bin`。
+macOS 首次构建如果缺少 C 编译器，先运行 `xcode-select --install`。首次整理桌面、文稿或下载目录时，系统可能要求为终端授予文件访问权限。首次构建需要下载依赖。若提示找不到 `organizer`，将 Cargo 的安装目录加入 `PATH`；默认目录为 `$HOME/.cargo/bin`。
 
 ## 开始整理
 
@@ -148,7 +148,9 @@ organizer history --root "$workspace"
 
 ## 使用限制与问题处理
 
-- 当前为 Linux CLI 版本，不支持跨文件系统迁移、删除文件或旧目录、自动撤销。符号链接会被跳过，嵌套 Git 项目受到保护；涉及保护边界或硬链接的移动可能被拒绝。
+- 当前为 Linux/macOS CLI 版本，不支持跨文件系统迁移、删除文件或旧目录、自动撤销。符号链接会被跳过，嵌套 Git 项目受到保护；涉及保护边界或硬链接的移动可能被拒绝。
+- 执行器在两个平台都使用原子防覆盖移动：Linux 使用 `RENAME_NOREPLACE`，macOS 使用 `renameatx_np(RENAME_EXCL)`。文件系统不支持时报错停止，不会退化为可能覆盖的 `rename` 或 copy+delete。
+- macOS 会解析并记录 `/var`、`/tmp`、`/etc` 等系统路径别名后的真实根目录；根目录本身是符号链接时仍会拒绝。把输出写到系统别名之下时同样会解析真实目录。
 - Git 只记录结构，不备份文件正文，也不会因切换 Git 提交自动恢复真实目录。当前也不支持直接搬迁已初始化的管理根目录。
 - 执行失败时可能已有部分移动完成，工具会停止并保留记录。根据错误中给出的 `run_id` 使用 `organizer recover RUN_ID --root "$workspace"` 检查，不要直接重跑或删除 `.organizer/`。具体处理见 [恢复说明](docs/DEVELOPMENT.md#计划执行与恢复)。
 - 命令主要输出 JSON；`chat` 或 `plan` 返回退出码 `2` 表示报告中仍有待审核或未解决项。模型拒答、网络错误、路径冲突等会明确报错，不会自动绕过检查。

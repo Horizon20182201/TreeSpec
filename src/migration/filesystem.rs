@@ -1,28 +1,20 @@
-#[cfg(target_os = "linux")]
-mod linux {
-    use crate::migration::{
-        MigrationPlan, Operation,
-        plan::{parent, within},
-    };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native {
     use crate::{
         error::{Result, fail},
+        fsops::{self, DIRECTORY},
+        migration::{
+            MigrationPlan, Operation,
+            plan::{parent, within},
+        },
         scan::{FileStamp, ScanEntry},
         tree::NodeKind,
     };
-    use rustix::fs::{Mode, OFlags, RenameFlags, ResolveFlags, mkdirat, openat2, renameat_with};
     use std::{
         collections::BTreeMap,
         fs::File,
         path::{Path, PathBuf},
     };
-
-    const DIRECTORY: OFlags = OFlags::RDONLY
-        .union(OFlags::DIRECTORY)
-        .union(OFlags::CLOEXEC)
-        .union(OFlags::NOFOLLOW);
-    const RESOLVE: ResolveFlags = ResolveFlags::BENEATH
-        .union(ResolveFlags::NO_SYMLINKS)
-        .union(ResolveFlags::NO_XDEV);
 
     pub(crate) struct Filesystem {
         root: File,
@@ -30,23 +22,10 @@ mod linux {
         identity: FileStamp,
     }
 
-    fn same_identity(a: &FileStamp, b: &FileStamp) -> bool {
-        a.platform_file_key.is_some()
-            && a.platform_file_key == b.platform_file_key
-            && a.birthtime == b.birthtime
-    }
-
     impl Filesystem {
         pub(crate) fn open(path: &Path, identity: &FileStamp) -> Result<Self> {
-            // openat2 is required: older kernels/unsupported filesystems fail closed.
-            let root = File::from(openat2(
-                rustix::fs::CWD,
-                path,
-                DIRECTORY,
-                Mode::empty(),
-                ResolveFlags::NO_SYMLINKS,
-            )?);
-            if !same_identity(identity, &FileStamp::from_metadata(&root.metadata()?)) {
+            let root = fsops::open_root(path)?;
+            if !fsops::same_identity(identity, &FileStamp::from_metadata(&root.metadata()?)) {
                 return Err(fail("root identity changed"));
             }
             Ok(Self {
@@ -56,28 +35,12 @@ mod linux {
             })
         }
 
-        fn open_relative(&self, path: &str, flags: OFlags) -> Result<File> {
-            Ok(File::from(openat2(
-                &self.root,
-                if path.is_empty() { "." } else { path },
-                flags,
-                Mode::empty(),
-                RESOLVE,
-            )?))
+        fn open_relative(&self, path: &str, flags: rustix::fs::OFlags) -> Result<File> {
+            fsops::open_beneath(&self.root, path, flags)
         }
 
         fn inspect(&self, path: &str) -> Result<(FileStamp, NodeKind)> {
-            let file =
-                self.open_relative(path, OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC)?;
-            let metadata = file.metadata()?;
-            let kind = if metadata.is_file() {
-                NodeKind::File
-            } else if metadata.is_dir() {
-                NodeKind::Directory
-            } else {
-                return Err(fail("source is not a regular file/directory"));
-            };
-            Ok((FileStamp::from_metadata(&metadata), kind))
+            fsops::inspect_beneath(&self.root, path)
         }
 
         pub(crate) fn preflight(&self, plan: &MigrationPlan) -> Result<()> {
@@ -104,27 +67,18 @@ mod linux {
                 }
                 &entry.stamp
             };
-            if !same_identity(expected, &FileStamp::from_metadata(&directory.metadata()?)) {
+            if !fsops::same_identity(expected, &FileStamp::from_metadata(&directory.metadata()?)) {
                 return Err(fail("parent directory identity changed"));
             }
-            if !path.is_empty() {
-                match rustix::fs::openat(
-                    &directory,
-                    ".git",
-                    OFlags::PATH | OFlags::NOFOLLOW,
-                    Mode::empty(),
-                ) {
-                    Err(rustix::io::Errno::NOENT) => {}
-                    Ok(_) => return Err(fail("parent became a protected Git project")),
-                    Err(error) => return Err(error.into()),
-                }
+            if !path.is_empty() && fsops::exists_child(&directory, ".git")? {
+                return Err(fail("parent became a protected Git project"));
             }
             Ok(directory)
         }
 
         fn attached(&self, directory: &File, path: &str) -> Result<()> {
             let current = self.open_relative(path, DIRECTORY)?;
-            if !same_identity(
+            if !fsops::same_identity(
                 &FileStamp::from_metadata(&directory.metadata()?),
                 &FileStamp::from_metadata(&current.metadata()?),
             ) {
@@ -147,7 +101,7 @@ mod linux {
             let kind = match operation {
                 Operation::Mkdir { .. } => {
                     self.attached(&target_parent, parent(target))?;
-                    mkdirat(&target_parent, target_name, Mode::RWXU)?;
+                    fsops::create_directory(&target_parent, target_name)?;
                     NodeKind::Directory
                 }
                 Operation::MoveFile { from, .. } | Operation::MoveDirectory { from, .. } => {
@@ -166,12 +120,11 @@ mod linux {
                     }
                     self.attached(&source_parent, parent(from))?;
                     self.attached(&target_parent, parent(target))?;
-                    renameat_with(
+                    fsops::rename_noreplace(
                         &source_parent,
                         from.rsplit('/').next().unwrap(),
                         &target_parent,
                         target_name,
-                        RenameFlags::NOREPLACE,
                     )?;
                     source_parent.sync_all()?;
                     self.attached(&source_parent, parent(from))?;
@@ -185,7 +138,7 @@ mod linux {
                 return Err(fail("target type changed after operation"));
             }
             if let Some(before) = entries.get(operation.id()) {
-                if !same_identity(&before.stamp, &stamp) {
+                if !fsops::same_identity(&before.stamp, &stamp) {
                     return Err(fail(
                         "source identity changed during rename; inspect recovery log",
                     ));
@@ -298,10 +251,10 @@ mod linux {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) use linux::Filesystem;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use native::Filesystem;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod unsupported {
     use crate::{
         error::{Result, fail},
@@ -313,7 +266,7 @@ mod unsupported {
     impl Filesystem {
         pub(crate) fn open(_: &Path, _: &FileStamp) -> Result<Self> {
             Err(fail(
-                "M2 requires Linux openat2 and atomic no-replace rename",
+                "migration requires Linux or macOS descriptor-safe filesystem support",
             ))
         }
         pub(crate) fn preflight(&self, _: &MigrationPlan) -> Result<()> {
@@ -328,5 +281,5 @@ mod unsupported {
         }
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) use unsupported::Filesystem;

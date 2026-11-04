@@ -337,6 +337,9 @@ fn output(contents: &str, path: Option<&Path>) -> io::Result<()> {
 
 /// Reject existing symlink ancestors and lexical traversal for metadata writes.
 /// This is not the concurrent, descriptor-relative migration executor of M2.
+/// macOS exposes `/var`, `/tmp` and `/etc` as root-level aliases; those are
+/// accepted because rejecting them would make ordinary temporary paths
+/// unusable, while any other symlink ancestor is still refused.
 fn check_directory(path: &Path) -> io::Result<()> {
     let absolute = if path.is_absolute() {
         path.to_owned()
@@ -353,6 +356,9 @@ fn check_directory(path: &Path) -> io::Result<()> {
         }
         current.push(component);
         let metadata = fs::symlink_metadata(&current)?;
+        if metadata.file_type().is_symlink() && system_path_alias(&current) {
+            continue;
+        }
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -361,4 +367,14 @@ fn check_directory(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn system_path_alias(path: &Path) -> bool {
+    matches!(path.to_str(), Some("/var" | "/tmp" | "/etc"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_path_alias(_: &Path) -> bool {
+    false
 }

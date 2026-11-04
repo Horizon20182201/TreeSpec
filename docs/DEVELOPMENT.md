@@ -75,7 +75,7 @@ organizer plan --root ./Workspace \
 
 默认仅发送安全候选的名称、相对路径、ID、说明和必要祖先；不发送绝对管理根、device/inode 或文件正文。`.env` / `.env.*`、常见 SSH 私钥、`.pem/.key/.p12/.pfx/.keystore`、`.ssh/.aws/.gnupg/.kube` 及 credentials 节点被排除。嵌套 Git 项目、符号链接和特殊文件也不会进入 LLM 文件候选。名称和说明本身仍属于发送给已配置服务的元数据；使用 `LOCAL_ONLY` 或 `DISABLED` 可禁止云端发送。
 
-开启正文片段后，仅对 FileMapper 的选中文件读取支持的文本扩展名（如 txt/md/json/toml/yaml/源码），单文件最多 4 KiB、整次最多 64 KiB。使用 Linux 根目录描述符、禁止符号链接/挂载点绕行、核验文件身份并跳过硬链接；读前后身份变化或权限错误停止。二进制、无效 UTF-8、PDF 和识别出的私钥块退回名称上下文；暂未实现 PDF 标题提取。内建名称过滤和私钥标记不是完整的秘密检测器，任意文本仍可能包含敏感信息，`--read-content` 是明确发送这些片段的选择。
+开启正文片段后，仅对 FileMapper 的选中文件读取支持的文本扩展名（如 txt/md/json/toml/yaml/源码），单文件最多 4 KiB、整次最多 64 KiB。使用根目录描述符（Linux `openat2`，macOS 逐组件 `openat`）、禁止符号链接/挂载点绕行、核验文件身份并跳过硬链接；读前后身份变化或权限错误停止。二进制、无效 UTF-8、PDF 和识别出的私钥块退回名称上下文；暂未实现 PDF 标题提取。内建名称过滤和私钥标记不是完整的秘密检测器，任意文本仍可能包含敏感信息，`--read-content` 是明确发送这些片段的选择。
 
 调用限制：请求 JSON 最大 256 KiB，响应和审核报告最大 512 KiB；单次 HTTP 超时 30 秒，连接超时 10 秒，输出预算 4096 tokens。JSON/字段形状不合法最多重试一次；拒答、截断、工具调用、HTTP/网络失败和非法 ID/路径不自动重试。一次 `chat` 最多两次 TreeEditor、两次 FileMapper 调用；纯结构编辑不调用 Mapper。文件中的文字始终作为不可信数据，不能改变系统规则或获得执行权限。
 
@@ -83,7 +83,7 @@ HTTP 等待期间释放元数据锁，发布草案前重新加锁并核对基线
 
 ## 完整 M2 流程
 
-需要 Linux、稳定版 Rust、本机 Git 和 C 编译器。M2 要求内核支持 `openat2`（Linux 5.6+）且文件系统支持 `RENAME_NOREPLACE`；能力不足时报错停止，无覆盖式 rename 降级。SQLite 随 `rusqlite` 编译。保留 `Cargo.lock`；本次验证使用 Rust 1.95、Clippy 1.97。
+需要 Linux 或 macOS、稳定版 Rust、本机 Git 和 C 编译器。Linux 要求内核支持 `openat2`（5.6+）且文件系统支持 `RENAME_NOREPLACE`；macOS 要求系统提供 `renameatx_np`（10.12+）且文件系统支持 `RENAME_EXCL`。能力不足时报错停止，无覆盖式 rename 降级。macOS 没有 `openat2`，改用逐组件 `openat` 达到同等的根目录内、禁止符号链接、禁止跨卷解析。SQLite 随 `rusqlite` 编译。保留 `Cargo.lock`；本次在 macOS 26.6（Apple Silicon）上使用 Rust 1.99.1、Clippy 1.99.1 验证。
 
 以下演示保留全部 ID，将 `Inbox` 整体改名为 `Archive`：
 
@@ -167,7 +167,7 @@ cargo run -- plan --structural-only --from examples/old.tree --to examples/new.t
 
 退出码：正常完成为 `0`；I/O、解析、验证、执行失败或未完成迁移阻断命令时为 `1`；`status` 能生成报告且有不完整扫描、冲突、未知身份或待提交 Git 时为 `2`；`plan` 有未解决项、`chat` 草案有待审核项时也为 `2`。未确认的 LLM 审核标记会让 `plan` 返回 `1`，不输出迁移计划。Clap 参数错误使用 `2` 并输出用法。普通磁盘变化本身不会使 `status` 失败。计划生成成功后，执行时仍须重新验证。
 
-`normalize` / `plan --out` / `export-script --out` 只创建新输出，不覆盖已有文件或输入 Tree。输出父目录必须已存在；根目录与元数据输出路径拒绝 `..` 和已有符号链接祖先。不要用 shell 重定向覆盖输入文件。将草案、计划放在 `.organizer` 内；写到受管理用户目录会被扫描为新增文件，使旧计划过期。
+`normalize` / `plan --out` / `export-script --out` 只创建新输出，不覆盖已有文件或输入 Tree。输出父目录必须已存在；根目录与元数据输出路径拒绝 `..` 和已有符号链接祖先。macOS 的 `/var`、`/tmp`、`/etc` 属于系统别名，会被解析到真实目录；根目录本身是符号链接时仍拒绝。不要用 shell 重定向覆盖输入文件。将草案、计划放在 `.organizer` 内；写到受管理用户目录会被扫描为新增文件，使旧计划过期。
 
 ## 计划、执行与恢复
 
@@ -177,7 +177,7 @@ cargo run -- plan --structural-only --from examples/old.tree --to examples/new.t
 
 `apply` 默认与 `--dry-run` 都只读：不创建操作数据库、不写日志、不提交 Git。`--yes` 取得独占元数据锁，再次检查基线和完整扫描，将全部步骤以 `pending` 写入 SQLite 后逐步执行。每步前后校验扫描及身份；成功后同步父目录并持久化 `done`。任何失败立即停止，保留已发生的文件移动，不自动回滚。完成后再次验证目标，才发布 Tree/索引和一次 `refactor:` Git 提交；纯无变化计划不增加 Git 提交。
 
-真实操作使用根目录描述符、`openat2(BENEATH | NO_SYMLINKS | NO_XDEV)` 和叶名称，检查父目录身份/保护标记；禁止绝对路径、`..`、`.git`、`.organizer`、自身后代和挂载点穿越。移动使用原子 `RENAME_NOREPLACE`，即使目标在检查后被创建也不会覆盖；没有 copy+delete 或 shell 文件操作降级。新目录权限为 `0700`（受 umask 约束）。
+真实操作使用根目录描述符和叶名称，检查父目录身份/保护标记；禁止绝对路径、`..`、`.git`、`.organizer`、自身后代和挂载点穿越。Linux 使用 `openat2(BENEATH | NO_SYMLINKS | NO_XDEV)`；macOS 逐组件打开 `O_NOFOLLOW | O_DIRECTORY`，比较 `st_dev` 拒绝跨卷，所有中间目录都来自已打开的描述符。移动使用原子防覆盖原语：Linux `RENAME_NOREPLACE`、macOS `renameatx_np(RENAME_EXCL)`，即使目标在检查后被创建也不会覆盖；没有 copy+delete 或 shell 文件操作降级。新目录权限为 `0700`（受 umask 约束）。目录 `fsync` 失败不会被忽略；执行中断仍按恢复流程处理。
 
 ```bash
 # 在 apply --yes 之前，可导出并运行预览脚本；不隐含 --yes
@@ -218,7 +218,7 @@ organizer recover run_UUID --root "$demo" --finish-git
 
 新建元数据目录权限为 `0700`。SQLite 保存 `logical_id`、`last_path`、类型、device/inode、大小、mtime、ctime、可用时的 birthtime、硬链接数、保护标记和 `last_seen_scan`；Tree 仍只保存名称、ID、父子关系和说明。
 
-扫描逐项枚举目录，只读取元数据，不读文件正文。Linux 使用目录描述符与 `O_NOFOLLOW`，不递归跟随符号链接。内建跳过任何层级的 `.organizer`、根目录的 `.git`、符号链接及特殊文件；嵌套目录只要有 `.git` 标记，就作为受保护的独立目录节点，不进入内部，并在报告中提示。
+扫描逐项枚举目录，只读取元数据，不读文件正文。两个平台都从目录描述符出发并禁止跟随符号链接：Linux 用 `O_PATH | O_NOFOLLOW` 读取条目元数据，macOS 用 `fstatat(AT_SYMLINK_NOFOLLOW)`，再对目录重新打开并核验身份，不递归跟随符号链接。内建跳过任何层级的 `.organizer`、根目录的 `.git`、符号链接及特殊文件；嵌套目录只要有 `.git` 标记，就作为受保护的独立目录节点，不进入内部，并在报告中提示。
 
 权限错误、不可达目录、不可表达为 TreeSpec 的名称、非 UTF-8 名称、遍历中检测到的目录变化都会使扫描不完整。此时不推断 missing，不发布新快照。完整清单保存在内存，内存开销与节点数和路径长度有关，不随文件正文大小增长。
 
@@ -282,7 +282,7 @@ Inbox/ @d_inbox
 - `@ID` 在全树唯一，字符为 `[A-Za-z0-9_-]+`。`d_` / `f_` 是生成约定，不强制用户短 ID 使用前缀。
 - 同一父目录不能有同名节点，即使类型不同。不同目录可有同名文件。
 - `#` 后的内容为说明，去掉首尾空白，保留内部文本；允许空说明。说明为不含控制字符的单行文本。
-- 输入接受 UTF-8 和 LF/CRLF，输出统一 LF，不接受 BOM。Windows 编译时额外拒绝保留设备名、非法字符和尾部点/空格；目前运行验证以 Linux 为准。
+- 输入接受 UTF-8 和 LF/CRLF，输出统一 LF，不接受 BOM。Windows 编译时额外拒绝保留设备名、非法字符和尾部点/空格；目前运行验证以 Linux 和 macOS 为准。
 
 规范化输出为每个节点补齐 ID，采用目录优先、文件其次、组内按名称的 Unicode 顺序区分大小写排序。保留名称、ID、父子关系和说明；不保留原文空行、独立注释或原排列。`render_tree(parse_tree(rendered)) == rendered`。
 
@@ -331,7 +331,7 @@ src/
 ├── migration/
 │   ├── plan.rs      # 类型、摘要、确定性命名空间模拟与排序
 │   ├── validate.rs  # 严格 JSON/Tree、基线和扫描前置条件验证
-│   ├── filesystem.rs # Linux 描述符与原子 no-replace 操作
+│   ├── filesystem.rs # Linux/macOS 描述符与原子 no-replace 操作
 │   ├── execute.rs   # 执行、最终验证、元数据发布与 Git 重试
 │   └── journal.rs   # SQLite 操作日志与恢复检查
 └── metadata.rs      # 元数据路径校验、锁、发布标记、日志
@@ -356,7 +356,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
 ```
 
-Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移、全目录 dry-run 无写入、原子防覆盖、源变化、计划篡改、保护边界、循环阻断、故障日志、防重放、Git 失败重试和脚本转义。故障注入还覆盖 rename 已落盘而日志未确认的窗口。测试需要 Git，不需要 LLM 或网络服务；首次下载依赖需要 registry 访问或缓存。
+macOS 与 Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移、全目录 dry-run 无写入、原子防覆盖、源变化、计划篡改、保护边界、循环阻断、故障日志、防重放、Git 失败重试和脚本转义。故障注入还覆盖 rename 已落盘而日志未确认的窗口。本次在 macOS 26.6 上运行完整测试，并用交叉编译与 Clippy 检查 Linux 目标；APFS 无法创建非 UTF-8 文件名，因此该部分测试只在支持此类名称的文件系统上运行。测试需要 Git，不需要 LLM 或网络服务；首次下载依赖需要 registry 访问或缓存。
 
 [M3 Mock 测试](../tests/llm_mock.rs) 覆盖两阶段语义分类到真实迁移的闭环、文件 ID/内容保留、有限重试、`place/keep/review`、漏分、越界和非法操作、同名冲突、只读祖先、敏感候选、内容上限、正文读取前的文件替换/符号链接、API 等待期间磁盘变化、审核标记、隐私开关以及无 API 的手工回退。Provider 单元测试覆盖 HTTP 请求编码、响应解码、截断/工具调用拒绝和密钥脱敏。
 
@@ -366,11 +366,11 @@ Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真实迁移�
 cargo test --locked --test llm_http -- --ignored
 ```
 
-当前开发沙箱禁止绑定 TCP 端口，尚未在此环境验证该测试或真实模型服务；这与默认离线测试通过的结果分开报告。
+该测试已在 macOS 26.6 上验证通过；在禁止绑定 TCP 端口的开发沙箱中可能无法运行。默认离线测试不需要网络服务。
 
 ## 已知限制与后续建议
 
-- 扫描/迁移目前仅提供 Linux 实现；其他平台明确报不支持。M2 保守拒绝清单中任何节点跨挂载点（包括同设备 bind mount），即使该节点本次不移动。TreeSpec 和纯比较/关联逻辑保持平台无关。
+- 扫描/迁移目前提供 Linux 与 macOS 实现；其他平台明确报不支持。Linux 的 M2 保守拒绝清单中任何节点跨挂载点（包括同设备 bind mount）；macOS 用 `st_dev` 判断跨卷。即使该节点本次不移动也会拒绝。TreeSpec 和纯比较/关联逻辑保持平台无关。
 - device/inode 仍可能复用；birthtime 可用时用于排除冲突，不可用时不能保证百分之百识别。原路径被编辑器以新 inode 替换时按新对象处理，可能产生身份结构提交。内容变化检测依赖大小和时间，不计算正文哈希。
 - 扫描不是操作系统级原子快照。锁协调 Organizer 进程，不锁定外部编辑器；最后检查后仍可能发生外部修改。执行期间应保持管理根、祖先目录及元数据稳定，不支持恶意进程并发搬走已打开父目录的场景。描述符解析、防覆盖和前后检查不会把多步迁移变成文件系统事务；元数据发布仍假定 `.organizer` 由可信用户控制。
 - 管理根改名或搬迁会被根路径/身份检查拒绝。没有大小写不敏感文件系统的完备冲突判定、管理范围变更工具、自动元数据恢复或内容备份。

@@ -18,7 +18,7 @@ pub(crate) fn fail(message: impl Into<String>) -> OrganizerError {
     OrganizerError::Message(message.into())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl From<rustix::io::Errno> for OrganizerError {
     fn from(error: rustix::io::Errno) -> Self {
         Self::Io(error.into())

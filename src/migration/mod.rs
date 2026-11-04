@@ -1,4 +1,4 @@
-//! Deterministic plans and a fail-closed, journaled Linux executor.
+//! Deterministic plans and a fail-closed, journaled Linux/macOS executor.
 pub mod execute;
 mod filesystem;
 pub mod journal;

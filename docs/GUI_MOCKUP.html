@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="zh-Hans" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TreeSpec Organizer · macOS GUI 示例</title>
+<!-- 界面示例：静态数据，无网络请求，无外部资源。设计说明见 GUI_DESIGN.md。 -->
+<style>
+:root{color-scheme:light;--bg:#fbfbfd;--side:rgba(232,235,241,.86);--ink:#1d1d1f;--ink2:#6e6e73;--ink3:#a1a1a6;
+--line:rgba(0,0,0,.09);--fill:rgba(0,0,0,.045);--hover:rgba(0,0,0,.06);--card:#fff;--desk:#c9d1db;
+--accent:#0a66d9;--accent-soft:rgba(10,102,217,.12);--ok:#1f8a4c;--warn:#b25e00;--bad:#c8312b;--rev:#7a4fc1;
+--ok-soft:rgba(31,138,76,.12);--warn-soft:rgba(178,94,0,.12);--bad-soft:rgba(200,49,43,.10);--rev-soft:rgba(122,79,193,.12);
+--mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;--shadow:0 22px 70px rgba(20,30,50,.28),0 0 0 .5px rgba(0,0,0,.18)}
+[data-theme=dark]{color-scheme:dark;--bg:#1f2023;--side:rgba(42,44,49,.9);--ink:#f2f2f4;--ink2:#a1a1aa;--ink3:#6b6b73;
+--line:rgba(255,255,255,.1);--fill:rgba(255,255,255,.06);--hover:rgba(255,255,255,.08);--card:#2a2b2f;--desk:#353b44;
+--accent:#3d8bff;--accent-soft:rgba(61,139,255,.2);--ok:#40c076;--warn:#f0a23c;--bad:#ff6259;--rev:#b597ff;
+--ok-soft:rgba(64,192,118,.16);--warn-soft:rgba(240,162,60,.16);--bad-soft:rgba(255,98,89,.15);--rev-soft:rgba(181,151,255,.16);
+--shadow:0 22px 70px rgba(0,0,0,.55),0 0 0 .5px rgba(255,255,255,.14)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:13px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Helvetica Neue",sans-serif;
+color:var(--ink);background:var(--desk);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+code,.mono{font-family:var(--mono);font-size:12px}
+:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* 演示栏：不属于应用界面 */
+#demo{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:10px 20px;font-size:12px;color:#2b3340;
+background:rgba(255,255,255,.55);border-bottom:1px solid rgba(0,0,0,.08)}
+[data-theme=dark] #demo{color:#d6dbe3;background:rgba(0,0,0,.25)}
+#demo b{font-weight:600}
+#demo .grp{display:flex;gap:4px;align-items:center}
+#demo button{border:1px solid rgba(0,0,0,.14);background:rgba(255,255,255,.7);border-radius:6px;padding:3px 9px;cursor:pointer}
+[data-theme=dark] #demo button{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15)}
+#demo button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+#demo .note{margin-left:auto;opacity:.75}
+#desk{padding:26px 24px 40px;display:flex;justify-content:center}
+/* 窗口 */
+.win{position:relative;width:min(1240px,100%);height:800px;min-width:960px;background:var(--bg);border-radius:12px;
+box-shadow:var(--shadow);overflow:hidden;display:grid;grid-template-columns:212px 1fr;grid-template-rows:52px 1fr}
+.win.noinsp .insp{display:none}
+.win.welcome{width:760px;min-width:0;height:520px;grid-template-columns:300px 1fr;grid-template-rows:1fr}
+.side{grid-row:1/3;background:var(--side);backdrop-filter:blur(30px);border-right:1px solid var(--line);
+display:flex;flex-direction:column;padding:0 10px 10px}
+.lights{display:flex;gap:8px;padding:19px 8px 22px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.2)}
+.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.side h6{margin:6px 8px 4px;font-size:11px;font-weight:600;color:var(--ink3)}
+.nav{all:unset;display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:default;font-size:13px}
+.nav svg{width:16px;height:16px;flex:none;color:var(--accent)}
+.nav:hover{background:var(--hover)}
+.nav[aria-current=page]{background:var(--accent-soft)}
+.nav .cnt{margin-left:auto;font-size:11px;color:var(--ink2);background:var(--fill);border-radius:9px;padding:0 6px}
+.nav.off{color:var(--ink3)}.nav.off svg{color:var(--ink3)}
+.nav.alarm,.nav.alarm svg{color:var(--bad)}
+.nav.alarm .cnt{background:var(--bad);color:#fff}
+.llm{margin-top:auto;padding:8px;border-radius:8px;font-size:11.5px;color:var(--ink2);cursor:default}
+.llm:hover{background:var(--hover)}
+.llm b{display:block;font-weight:500;color:var(--ink);font-size:12px}
+.bar{grid-column:2;display:flex;align-items:center;gap:10px;padding:0 14px 0 18px;border-bottom:1px solid var(--line)}
+.bar .title{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.bar .title b{font-size:14px;font-weight:650}
+.bar .title span{font-size:11px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:20px;padding:3px 10px 3px 8px;font-size:12px;
+background:var(--fill);border:0;cursor:default;white-space:nowrap}
+.pill i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.ok{color:var(--ok);background:var(--ok-soft)}.pill.warn{color:var(--warn);background:var(--warn-soft)}
+.pill.bad{color:var(--bad);background:var(--bad-soft)}.pill.mute{color:var(--ink2)}
+.pill small{color:var(--ink2);font-size:11px}
+.sp{flex:1}
+.tb{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:28px;min-width:30px;padding:0 8px;
+border:0;border-radius:7px;background:transparent;color:var(--ink2);cursor:default}
+.tb:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+.tb svg{width:17px;height:17px}
+.tb[aria-pressed=true]{color:var(--accent);background:var(--accent-soft)}
+.tb:disabled{opacity:.35}
+.tb.hot{color:var(--accent);background:var(--accent-soft)}
+.body{grid-column:2;display:flex;min-height:0}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.page{flex:1;overflow:auto;padding:16px 20px 24px;min-height:0}
+.insp{width:268px;flex:none;border-left:1px solid var(--line);overflow:auto;padding:16px;background:var(--bg)}
+.insp h4{margin:0 0 10px;font-size:13px;font-weight:650;word-break:break-all}
+.kv{display:grid;grid-template-columns:64px 1fr;gap:5px 10px;font-size:12px;margin:0 0 14px}
+.kv dt{color:var(--ink2)}.kv dd{margin:0;word-break:break-all}
+.quote{border-left:3px solid var(--rev);background:var(--rev-soft);padding:8px 10px;border-radius:0 6px 6px 0;font-size:12px}
+.quote small{display:block;color:var(--ink2);margin-top:4px;font-size:11px}
+.empty{color:var(--ink3);font-size:12px;padding:30px 4px;text-align:center}
+/* 下一步横幅、卡片、按钮 */
+.next{display:flex;align-items:center;gap:12px;margin:12px 20px 0;padding:9px 10px 9px 14px;border-radius:9px;
+background:var(--accent-soft);font-size:12.5px}
+.next.warn{background:var(--warn-soft)}.next.bad{background:var(--bad-soft)}
+.next b{font-weight:600;white-space:nowrap}
+.next span{flex:1;min-width:0}
+.btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 12px;border-radius:6px;border:.5px solid var(--line);
+background:var(--card);box-shadow:0 .5px 1px rgba(0,0,0,.12);cursor:default;white-space:nowrap;font-size:12.5px}
+.btn:hover:not(:disabled){filter:brightness(.97)}
+.btn.pri{background:var(--accent);color:#fff;border-color:transparent}
+.btn.danger{background:var(--bad);color:#fff;border-color:transparent}
+.btn:disabled{opacity:.4}
+.btn.sm{height:22px;padding:0 9px;font-size:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+h2{margin:0 0 2px;font-size:20px;font-weight:700;letter-spacing:-.01em}
+h3{margin:18px 0 8px;font-size:13px;font-weight:650}
+.sub{color:var(--ink2);margin:0 0 14px}
+.card{background:var(--card);border:.5px solid var(--line);border-radius:10px;padding:14px 16px}
+.hero{display:flex;gap:16px;align-items:center}
+.hero .big{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;flex:none}
+.hero .big svg{width:22px;height:22px}
+.hero.ok .big{background:var(--ok-soft);color:var(--ok)}.hero.warn .big{background:var(--warn-soft);color:var(--warn)}
+.hero.bad .big{background:var(--bad-soft);color:var(--bad)}
+.hero h2{font-size:17px}
+.cols{display:grid;grid-template-columns:1.25fr 1fr;gap:16px;margin-top:16px}
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.tile{all:unset;display:block;padding:10px 12px;border-radius:9px;background:var(--fill);cursor:default}
+.tile b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile span{font-size:11.5px;color:var(--ink2)}
+.tile.on{background:var(--accent-soft)}.tile.zero b{color:var(--ink3)}
+.list{border:.5px solid var(--line);border-radius:9px;background:var(--card);overflow:hidden}
+.li{display:flex;align-items:center;gap:10px;padding:7px 12px;border-top:.5px solid var(--line);font-size:12.5px;cursor:default}
+.li:first-child{border-top:0}
+.li:hover{background:var(--hover)}
+.li .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li.sel{background:var(--accent-soft)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:5px;padding:1px 6px;white-space:nowrap;
+background:var(--fill);color:var(--ink2)}
+.badge.ok{background:var(--ok-soft);color:var(--ok)}.badge.warn{background:var(--warn-soft);color:var(--warn)}
+.badge.bad{background:var(--bad-soft);color:var(--bad)}.badge.rev{background:var(--rev-soft);color:var(--rev)}
+.badge.acc{background:var(--accent-soft);color:var(--accent)}
+.badge b{font-family:var(--mono);font-weight:700}
+.muted{color:var(--ink2)}.tiny{font-size:11.5px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{text-align:left;font-weight:500;color:var(--ink2);font-size:11.5px;padding:6px 10px;border-bottom:.5px solid var(--line)}
+td{padding:6px 10px;border-bottom:.5px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.err{font-family:var(--mono);font-size:11.5px;background:var(--fill);border-radius:7px;padding:9px 11px;white-space:pre-wrap;word-break:break-all}
+.hint{font-size:12px;color:var(--ink2);margin-top:6px}
+/* 大纲 */
+.tree{border:.5px solid var(--line);border-radius:9px;background:var(--card);padding:4px 0;font-size:12.5px}
+.tr{display:grid;grid-template-columns:minmax(0,1fr) 150px 108px;align-items:center;height:26px;padding-right:10px;cursor:default}
+.tr.two{grid-template-columns:minmax(0,1fr) auto}
+.tr:hover{background:var(--hover)}.tr[aria-selected=true]{background:var(--accent-soft)}
+.tr .nm{display:flex;align-items:center;gap:5px;min-width:0;white-space:nowrap}
+.tr .nm span{overflow:hidden;text-overflow:ellipsis}
+.tw{width:14px;flex:none;color:var(--ink3);text-align:center;font-size:10px}
+.tr .ic{width:15px;height:15px;flex:none}
+.tr .ds{color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.tr .mk{justify-self:end}
+.tr.gone .nm span{text-decoration:line-through;color:var(--ink2)}
+.tr input{margin:0 2px 0 0}
+.tr .lock{color:var(--ink3)}
+.scope{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 12px;border-radius:9px;background:var(--fill);font-size:12px}
+.search{height:26px;border-radius:7px;border:.5px solid var(--line);background:var(--card);padding:0 10px;width:200px}
+/* 整理页 */
+.org{display:flex;flex:1;min-height:0}
+.rounds{width:236px;flex:none;border-right:1px solid var(--line);overflow:auto;padding:12px 10px;display:flex;flex-direction:column}
+.rounds h6{margin:10px 6px 4px;font-size:11px;font-weight:600;color:var(--ink3)}
+.rd{all:unset;display:block;padding:7px 9px;border-radius:7px;cursor:default}
+.rd:hover{background:var(--hover)}.rd[aria-current=true]{background:var(--accent-soft)}
+.rd b{display:block;font-weight:600;font-size:12.5px}
+.rd .row{gap:4px;margin-top:3px}
+.rounds .foot{margin-top:auto;display:flex;gap:6px;padding:10px 4px 0}
+.detail{flex:1;min-width:0;overflow:auto;padding:14px 20px 24px}
+.steps{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink3);margin-bottom:12px}
+.steps span{display:inline-flex;align-items:center;gap:5px}
+.steps span i{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:10.5px;
+background:var(--fill);color:var(--ink2);font-weight:600}
+.steps .done{color:var(--ink2)}.steps .done i{background:var(--ok-soft);color:var(--ok)}
+.steps .cur{color:var(--ink);font-weight:600}.steps .cur i{background:var(--accent);color:#fff}
+.steps em{width:22px;height:1px;background:var(--line)}
+.seg{display:inline-flex;background:var(--fill);border-radius:7px;padding:2px;gap:2px}
+.seg button{border:0;background:transparent;border-radius:5px;padding:3px 14px;font-size:12px;cursor:default}
+.seg button[aria-pressed=true]{background:var(--card);box-shadow:0 .5px 2px rgba(0,0,0,.18)}
+.seg button:disabled{color:var(--ink3)}
+.notice{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:8px;background:var(--warn-soft);font-size:12.5px;margin:10px 0}
+.notice svg{width:16px;height:16px;flex:none;color:var(--warn);margin-top:1px}
+.notice.bad{background:var(--bad-soft)}.notice.bad svg{color:var(--bad)}
+.notice.info{background:var(--accent-soft)}.notice.info svg{color:var(--accent)}
+/* 编辑器 */
+.ed{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.code{display:flex;border:.5px solid var(--line);border-radius:9px;background:var(--card);overflow:hidden;font-family:var(--mono);font-size:12.5px;line-height:20px}
+.gut{padding:8px 0;background:var(--fill);color:var(--ink3);text-align:right;user-select:none;min-width:38px}
+.gut div{padding:0 8px}.gut .e{background:var(--bad);color:#fff}.gut .ro{color:var(--rev)}
+.code textarea{flex:1;border:0;outline:0;resize:none;background:transparent;padding:8px 10px;line-height:20px;
+font:inherit;white-space:pre;overflow:auto;tab-size:2;min-height:320px}
+.chk{font-size:12px}.chk li{margin:3px 0}
+.chk ul{margin:4px 0 10px;padding-left:16px}
+/* 工作表（sheet）与活动日志 */
+.veil{position:absolute;inset:52px 0 0 0;background:rgba(0,0,0,.18);display:flex;justify-content:center;align-items:flex-start;z-index:5}
+.win.welcome .veil{inset:0}
+.sheet{width:560px;max-height:calc(100% - 20px);overflow:auto;background:var(--bg);border-radius:0 0 12px 12px;
+box-shadow:0 18px 50px rgba(0,0,0,.3),0 0 0 .5px var(--line);padding:18px 20px 16px}
+.sheet.anim{animation:drop .18s ease-out}
+@keyframes drop{from{transform:translateY(-14px);opacity:.4}}
+.sheet h3{margin:0 0 4px;font-size:14px}
+.sheet .kv{grid-template-columns:76px 1fr}
+.sheet .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;align-items:center}
+.sheet .acts .muted{margin-right:auto;font-size:11.5px}
+.sheet label.ck{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0}
+.sheet label.ck input{margin-top:3px}
+.sheet .fld{display:grid;grid-template-columns:76px 1fr;gap:6px 10px;align-items:start;margin:8px 0;font-size:12.5px}
+.sheet .fld>span:first-child{color:var(--ink2);padding-top:4px}
+.inp{width:100%;border:.5px solid var(--line);border-radius:6px;background:var(--card);padding:4px 8px;min-height:26px}
+textarea.inp{min-height:62px;resize:vertical}
+.cmd{position:relative;font-family:var(--mono);font-size:11.5px;background:var(--fill);border-radius:7px;padding:8px 52px 8px 10px;word-break:break-all;margin-top:4px}
+.cmd button{position:absolute;right:6px;top:6px}
+.prog{height:6px;border-radius:3px;background:var(--fill);overflow:hidden;margin:12px 0 6px}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .35s}
+.log{border-top:1px solid var(--line);height:150px;flex:none;overflow:auto;font-size:12px;background:var(--bg)}
+.log .hd{position:sticky;top:0;display:flex;align-items:center;padding:6px 14px;background:var(--bg);border-bottom:.5px solid var(--line);font-weight:600}
+.log .en{display:grid;grid-template-columns:52px 96px 1fr 80px;gap:10px;padding:5px 14px;border-bottom:.5px solid var(--line)}
+.log .en code{word-break:break-all;color:var(--ink2)}
+.log .en .badge{align-self:start;justify-self:start}
+/* 欢迎窗口 */
+.wl{grid-row:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:30px;text-align:center;
+background:var(--side);border-right:1px solid var(--line)}
+.wl .lights{position:absolute;left:10px;top:0}
+.appicon{width:84px;height:84px;border-radius:20px;background:linear-gradient(160deg,#3a8dff,#1b55c4);display:grid;place-items:center;
+box-shadow:0 6px 18px rgba(16,70,170,.35)}
+.appicon svg{width:48px;height:48px;color:#fff}
+.wl h2{margin:6px 0 0}
+.wr{padding:22px 18px;overflow:auto}
+.drop{margin-top:12px;border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--ink2);font-size:12px}
+.ctx{position:absolute;z-index:6;min-width:190px;background:var(--bg);border-radius:8px;padding:4px;box-shadow:0 10px 30px rgba(0,0,0,.25),0 0 0 .5px var(--line)}
+.ctx button{all:unset;display:block;padding:4px 10px;border-radius:5px;font-size:12.5px;cursor:default}
+.ctx button:hover{background:var(--accent);color:#fff}
+.tip{border-bottom:1px dotted var(--ink3)}
+</style>
+</head>
+<body>
+<div id="demo" role="toolbar" aria-label="演示控制（不属于应用界面）">
+  <b>演示场景</b>
+  <div class="grp" id="scn">
+    <button data-a="scn" data-v="welcome">欢迎窗口</button>
+    <button data-a="scn" data-v="uninit">未初始化</button>
+    <button data-a="scn" data-v="clean">已同步 · 有整理轮次</button>
+    <button data-a="scn" data-v="changed">磁盘有变化</button>
+    <button data-a="scn" data-v="unfinished">迁移未完成</button>
+  </div>
+  <div class="grp"><b>外观</b>
+    <button data-a="theme" data-v="light">浅色</button><button data-a="theme" data-v="dark">深色</button>
+  </div>
+  <span class="note">静态示例数据，不读写任何文件。建议从“已同步”开始，走一遍“生成计划 → 预览 → 执行 → 归档”。</span>
+</div>
+<div id="desk"><div id="app"></div></div>
+<script>
+"use strict";
+// ---------- 图标（24×24 描边） ----------
+const P={
+ overview:'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+ structure:'M5 4v16M5 6h4M5 12h4M5 18h4M12 6h8M12 12h8M12 18h8',
+ organize:'M4 7h13M14 4l3 3-3 3M20 17H7M10 14l-3 3 3 3',
+ history:'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
+ recovery:'M12 3l9.5 17h-19zM12 10v4.5M12 17.5v.01',
+ refresh:'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
+ plus:'M12 5v14M5 12h14',
+ log:'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+ insp:'M4 5h16v14H4zM15 5v14',
+ folder:'M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z',
+ file:'M6.5 3h7.5l4.5 4.5V21h-12zM14 3v4.5h4.5',
+ lock:'M7.5 11V8.5a4.5 4.5 0 0 1 9 0V11M5.5 11h13v9h-13z',
+ check:'M5 12.5l4.5 4.5L19 7.5',
+ warn:'M12 3l9.5 17h-19zM12 10v4.5M12 17.5v.01',
+ info:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.01',
+ tree:'M12 3.5v17M12 8.5l-5.5 4M12 8.5l5.5 4M12 14l-6.5 5M12 14l6.5 5',
+ git:'M6 4v10M6 14a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 11c0 4-6 3-11 4.5',
+};
+const I=(k,c='')=>`<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[k]}"/></svg>`;
+// 所有动态文本都经过 h()：与真实实现“只按文本渲染”的要求一致
+const h=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const q=s=>"'"+String(s).replace(/'/g,"'\\''")+"'";   // 与 export-script 相同的单引号转义
+const now=()=>new Date().toTimeString().slice(0,5);
+
+// ---------- 示例数据 ----------
+let ROOT='/Users/me/Documents/Workspace';
+const LLM={label:'gpt-x@api.example.com',kind:'远程，HTTPS'};
+// [id, 父 id, 名称, 是否目录, 说明, 标记]  标记：P 受保护的嵌套 Git 项目，X 敏感名称
+const BASE=[
+ ['d_2b81e0c4',null,'Inbox',1,'暂未分类'],['f_91c2aa07','d_2b81e0c4','scan_0412.pdf',0,''],['f_c0d4e911','d_2b81e0c4','todo.txt',0,''],
+ ['d_5e0f7d21',null,'Projects',1,''],['d_a83c1f02','d_5e0f7d21','tool',1,'','P'],
+ ['d_7f3c0b55',null,'Research',1,'科研资料'],['d_7f3c9a12','d_7f3c0b55','Papers',1,'学术论文'],
+ ['f_44e1b2d0','d_7f3c9a12','ASLR.pdf',0,''],['f_1d9f6c3a','d_7f3c9a12','CRUSH.pdf',0,''],['f_e27a5b18','d_7f3c9a12','notes.pdf',0,''],
+ ['f_0ab3c9e6',null,'.env',0,'','X'],
+].map(([id,parent,name,dir,desc,flag])=>({id,parent,name,dir:!!dir,desc,flag}));
+const byId=Object.fromEntries(BASE.map(n=>[n.id,n]));
+const pathOf=id=>{const n=byId[id];return n.parent?pathOf(n.parent)+'/'+n.name:n.name};
+// 审核视图：papers.tree 的目标结构。[深度, 名称, 是否目录, 标记, 标注, 节点]
+const REVIEW=[
+ [0,'Inbox',1],[1,'scan_0412.pdf',0],[1,'todo.txt',0],[0,'Projects',1],[1,'tool',1,'','','','P'],
+ [0,'Research',1],[1,'Papers',1,'#','说明改为“学术论文（按主题）”'],
+ [2,'C2Rust',1,'+','新目录'],[3,'CRUSH.pdf',0,'>','自 Papers/'],
+ [2,'Security',1,'+','新目录'],[3,'ASLR.pdf',0,'>','自 Papers/'],
+ [2,'notes.pdf',0,'?','待审核'],[0,'.env',0,'','','','X'],
+].map(([d,name,dir,mark,note,_,flag],i)=>({i,d,name,dir:!!dir,mark,note,flag}));
+const MARK={'+':['acc','新目录'],'~':['acc','改名'],'>':['acc','移到新目录'],'^':['','随上级移动'],'#':['','说明变化'],'?':['rev','待审核'],'!':['bad','阻断']};
+const WHY={
+ 'CRUSH.pdf':{old:'Research/Papers/CRUSH.pdf',now:'Research/Papers/C2Rust/CRUSH.pdf',dec:'place',why:'标题是 “Semantics-guided C-to-Rust translation”，属于 C2Rust 主题。'},
+ 'ASLR.pdf':{old:'Research/Papers/ASLR.pdf',now:'Research/Papers/Security/ASLR.pdf',dec:'place',why:'ASLR 是地址空间布局随机化，属于系统安全主题。'},
+ 'notes.pdf':{old:'Research/Papers/notes.pdf',now:'Research/Papers/notes.pdf',dec:'review',why:'文件名无法判断主题，保留原位，等待人工决定。'},
+};
+const PAPERS_OPS=[['mkdir','Research/Papers/C2Rust'],['mkdir','Research/Papers/Security'],
+ ['move_file','Research/Papers/CRUSH.pdf','Research/Papers/C2Rust/CRUSH.pdf'],['move_file','Research/Papers/ASLR.pdf','Research/Papers/Security/ASLR.pdf']];
+const INBOX_TEXT=`!tree 1
+
+Inbox/ @d_2b81e0c4 # 暂未分类
+  Archive/ # 扫描件
+    scan_0412.pdf @f_91c2aa07
+  todo.txt @f_c0d4e911
+Projects/ @d_5e0f7d21
+  tool/ @d_a83c1f02
+Research/ @d_7f3c0b55 # 科研资料
+  Papers/ @d_7f3c9a12 # 学术论文
+    ASLR.pdf @f_44e1b2d0
+    CRUSH.pdf @f_1d9f6c3a
+    notes.pdf @f_e27a5b18
+.env @f_0ab3c9e6
+`;
+const CHANGES={
+ clean:{added:[],missing:[],moved:[],changed:[],unknown:[]},
+ changed:{added:['Inbox/IMG_2031.heic','Inbox/receipt.pdf'],missing:[],moved:[['Inbox/todo.txt','Projects/todo.txt']],changed:['Research/Papers/notes.pdf'],unknown:[]},
+};
+const BOUNDARY=[['P','Projects/tool','嵌套 Git 项目，受保护'],['S','latest.pdf','符号链接，已跳过'],['E','.git','已排除']];
+const RUN={id:'run_7b2e41c9',plan:'sha256:41a9d0e3',status:'failed',done:3,total:4,
+ error:'migration run_7b2e41c9 stopped after 3/4 acknowledged operations: cannot move Research/Papers/ASLR.pdf: Permission denied (os error 13)',
+ hint:'第 4 步因权限不足失败。人工核对源和目标后，可以“标记已人工处理”，再归档并同步。',
+ steps:[['done','mkdir','Research/Papers/C2Rust','','在目标'],['done','mkdir','Research/Papers/Security','','在目标'],
+  ['done','move_file','Research/Papers/CRUSH.pdf','…/C2Rust/CRUSH.pdf','在目标'],['pending','move_file','Research/Papers/ASLR.pdf','…/Security/ASLR.pdf','在源']]};
+const COMMITS=[['a41c9e2','refactor','apply plan sha256:9c03e1f7 (cleanup.tree)'],['7d0b113','reconcile','2 added, 1 moved'],['3f8e2aa','init','11 nodes']];
+
+function freshRounds(){return [
+ {name:'papers.tree',src:'LLM',stage:'待计划',ack:'有 1 个待审核项',plan:null,preview:null},
+ {name:'inbox.tree',src:'手工',stage:'待计划',ack:null,plan:null,preview:null,text:INBOX_TEXT,saved:INBOX_TEXT},
+ {name:'cleanup.tree',src:'手工',stage:'已执行',ack:null,plan:{name:'cleanup.json',ops:[],sha:'9c03e1f7'},preview:null},
+]}
+const S={scn:'clean',page:'overview',theme:'light',insp:true,log:false,round:'papers.tree',seg:'review',only:false,
+ sel:null,scope:new Set(['d_7f3c9a12']),open:new Set(['d_2b81e0c4','d_7f3c0b55','d_7f3c9a12','d_5e0f7d21']),
+ tab:null,sheet:null,rounds:freshRounds(),unpaired:[{name:'old.json',stage:'计划已过期'}],logs:[],runs:[['run_51aa03f2','sha256:9c03e1f7','complete',3,3]],
+ commits:COMMITS.slice(),changes:CHANGES.clean,unfinished:false,uninit:false,scanned:'10:42'};
+// ---------- 状态模型（真实实现中由 Rust 的 organizer::frontend 计算） ----------
+const nChanges=()=>{const c=S.changes;return c.added.length+c.missing.length+c.moved.length+c.changed.length+c.unknown.length};
+function ws(){
+ if(S.uninit) return {code:'uninit',label:'未初始化',tone:'mute'};
+ if(S.unfinished) return {code:'unfinished',label:'迁移未完成',tone:'bad'};
+ if(nChanges()) return {code:'changed',label:`有 ${nChanges()} 项变化`,tone:'warn'};
+ return {code:'clean',label:'已同步',tone:'ok'};
+}
+const pendingCount=()=>S.rounds.length+S.unpaired.length;
+const blocked=()=>({changed:'受阻：磁盘有变化',unfinished:'受阻：迁移未完成',uninit:'受阻：未初始化'})[ws().code]||null;
+const canDraft=()=>ws().code==='clean';
+const cur=()=>S.rounds.find(r=>r.name===S.round);
+function next(){ // 对应 NextStep
+ const w=ws().code;
+ if(w==='uninit') return {t:'初始化这个文件夹',d:'扫描目录并创建 .organizer/，不移动任何文件。',b:['初始化…','init']};
+ if(w==='unfinished') return {tone:'bad',t:'迁移未完成',d:`在恢复页检查 ${RUN.id}，其他页面的写操作已禁用。`,b:['前往恢复','go','recovery']};
+ if(w==='changed') return pendingCount()
+  ?{tone:'warn',t:'磁盘有变化',d:`先归档进行中的 ${pendingCount()} 项，再同步。`,b:['全部归档…','archiveAll']}
+  :{tone:'warn',t:'磁盘有变化',d:'同步以记录这些变化，之后才能新建草案。',b:['同步…','sync']};
+ const ex=S.rounds.find(r=>r.stage==='可执行');
+ if(ex) return {t:`${ex.name} 可执行`,d:ex.preview?'预览已通过，执行前会重新检查。':'先预览，再执行迁移。',b:ex.preview?['执行迁移…','apply',ex.name]:['预览','dryrun',ex.name]};
+ const np=S.rounds.find(r=>r.stage==='待计划');
+ if(np) return {t:`${np.name} 待计划`,d:np.ack?`需要先确认审核（${np.ack}）。`:'检查目标结构后生成计划。',b:[np.ack?'确认并生成计划…':'生成计划…','plan',np.name]};
+ const dn=S.rounds.find(r=>r.stage==='已执行'||r.stage==='计划已过期')||S.unpaired[0];
+ if(dn) return {t:`${dn.name} 可以归档`,d:'归档用完的草案和计划。',b:['全部归档…','archiveAll']};
+ return {t:'已同步',d:'可以开始新一轮整理。',b:['新建 LLM 草案…','chat']};
+}
+const STAGE={'待计划':'acc','可执行':'ok','已执行':'','计划已过期':'warn','无需执行':'','草案无效':'bad'};
+const stageBadge=r=>{const b=blocked();
+ if(b&&!['已执行','计划已过期'].includes(r.stage)) return `<span class="badge warn">${h(b)}</span>`;
+ return `<span class="badge ${STAGE[r.stage]??''}">${h(r.stage)}</span>`};
+
+// ---------- 窗口外壳 ----------
+const PAGES=[['overview','概览'],['structure','结构'],['organize','整理'],['history','历史'],['recovery','恢复']];
+function render(){
+ document.documentElement.dataset.theme=S.theme;
+ document.querySelectorAll('#demo button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.a==='scn'?b.dataset.v===S.scn:b.dataset.v===S.theme)));
+ const app=document.getElementById('app');
+ if(S.scn==='welcome'){app.innerHTML=welcome();return}
+ const w=ws(),nx=next(),cnt=pendingCount();
+ const nav=PAGES.map(([k,t],i)=>{
+  const alarm=k==='recovery'&&S.unfinished,off=(k==='recovery'&&!S.unfinished)||(S.uninit&&k!=='overview');
+  const badge=k==='organize'&&cnt?`<span class="cnt">${cnt}</span>`:alarm?'<span class="cnt">1</span>':'';
+  return `<button class="nav ${off?'off':''} ${alarm?'alarm':''}" data-a="go" data-v="${k}" ${S.page===k?'aria-current="page"':''} ${off?'aria-disabled="true"':''} title="⌘${i+1}">${I(k)}${t}${badge}</button>`}).join('');
+ const side=`<nav class="side" aria-label="工作区"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><h6>工作区</h6>${nav}
+  <div class="llm" data-a="settings" role="button" tabindex="0" title="打开设置（⌘,）">LLM<b>${h(LLM.label)}</b>${h(LLM.kind)}</div></nav>`;
+ const bar=`<header class="bar"><div class="title"><b>${h(ROOT.split('/').pop())}</b><span>${h(ROOT)}</span></div>
+  <button class="pill ${w.tone}" data-a="go" data-v="overview" title="工作区状态"><i></i>${h(w.label)}<small>扫描 ${h(S.scanned)}</small></button><span class="sp"></span>
+  <button class="tb" data-a="refresh" title="重新扫描（⌘R）" aria-label="重新扫描" ${S.uninit?'disabled':''}>${I('refresh')}</button>
+  <button class="tb" data-a="chat" title="${canDraft()?'新建 LLM 草案（⌘N）':h(blocked())}" aria-label="新建草案" ${canDraft()?'':'disabled'}>${I('plus')}</button>
+  <button class="tb" data-a="log" aria-pressed="${S.log}" title="活动日志（⇧⌘L）" aria-label="活动日志">${I('log')}</button>
+  <button class="tb" data-a="insp" aria-pressed="${S.insp}" title="检查器（⌥⌘0）" aria-label="检查器">${I('insp')}</button></header>`;
+ const banner=`<div class="next ${nx.tone||''}" role="status"><b>下一步</b><span>${h(nx.t)}：${h(nx.d)}</span><button class="btn sm pri" data-a="${nx.b[1]}" data-v="${h(nx.b[2]||'')}">${h(nx.b[0])}</button></div>`;
+ const pg=({overview,structure,organize,history,recovery})[S.page]();
+ app.innerHTML=`<div class="win ${S.insp?'':'noinsp'}">${side}${bar}<div class="body"><div class="main">${banner}
+  ${S.page==='organize'?pg.main:`<div class="page">${pg.main}</div>`}${S.log?logView():''}</div>
+  ${S.insp?`<aside class="insp" aria-label="检查器">${pg.insp||'<div class="empty">选择一项以查看详情</div>'}</aside>`:''}</div>
+  ${S.sheet?`<div class="veil">${sheet()}</div>`:''}${S.ctx||''}</div>`;
+ const f=document.querySelector('.sheet [data-focus]');if(f)f.focus();
+ app.querySelectorAll('[data-a]:not(button):not(input):not(label):not(.tw)').forEach(x=>{if(!x.hasAttribute('tabindex'))x.tabIndex=0});
+}
+// ---------- 概览（含初始化页） ----------
+const TILES=[['added','新增'],['missing','缺失'],['moved','移动'],['changed','仅内容变化'],['unknown','未知身份']];
+function overview(){
+ if(S.uninit) return {main:`<div class="card" style="max-width:640px;margin:10px auto">
+  <div class="hero"><div class="big" style="background:var(--accent-soft);color:var(--accent)">${I('folder')}</div>
+  <div><h2>这个文件夹还没有初始化</h2><div class="mono muted">${h('/Users/me/Downloads/Scans')}</div></div></div>
+  <h3>初始化会做什么</h3><ul style="margin:0;padding-left:18px;line-height:1.8">
+  <li>扫描目录，只读取文件名和元数据，不读取文件内容。</li>
+  <li>创建 <code>.organizer/</code>：结构文本、SQLite 索引、只记录结构的 Git 仓库。</li><li>不移动、不修改任何已有文件。</li></ul>
+  <div class="notice info">${I('info')}<span>“下载”属于受保护的位置。如果 macOS 询问是否允许访问，请选择“允许”；拒绝后扫描会不完整。</span></div>
+  <div class="row" style="justify-content:flex-end"><button class="btn" data-a="scn" data-v="welcome">选择其他文件夹…</button><button class="btn pri" data-a="init">初始化…</button></div></div>`,
+  insp:`<h4>Scans</h4><dl class="kv"><dt>路径</dt><dd class="mono">/Users/me/Downloads/Scans</dd><dt>状态</dt><dd>未初始化</dd><dt>上级</dt><dd>没有已初始化的上级工作区</dd></dl>`};
+ const w=ws(),c=S.changes;
+ const hero=S.unfinished
+  ?`<div class="card hero bad"><div class="big">${I('warn')}</div><div style="flex:1"><h2>迁移未完成</h2><div class="muted">${h(RUN.id)} 在第 ${RUN.done+1} 步停止。检查完成之前，同步、草案和执行都不可用。</div></div><button class="btn pri" data-a="go" data-v="recovery">前往恢复</button></div>`
+  :w.code==='changed'
+  ?`<div class="card hero warn"><div class="big">${I('refresh')}</div><div style="flex:1"><h2>磁盘有 ${nChanges()} 项变化，待同步</h2><div class="muted">这些变化发生在 TreeSpec Organizer 之外。${pendingCount()?'有进行中的整理轮次，需要先归档。':'同步后才能新建草案。'}</div></div>
+    ${pendingCount()?`<button class="btn pri" data-a="archiveAll">全部归档…</button>`:''}<button class="btn ${pendingCount()?'':'pri'}" data-a="sync" ${pendingCount()?'disabled title="先归档进行中的整理轮次"':''}>同步…</button></div>`
+  :`<div class="card hero ok"><div class="big">${I('check')}</div><div style="flex:1"><h2>已同步</h2><div class="muted">磁盘与基线一致。上次扫描 ${h(S.scanned)}，共 11 个节点。</div></div><button class="btn" data-a="copy" ${canDraft()?'':'disabled'}>复制当前结构为草案…</button><button class="btn pri" data-a="chat">新建 LLM 草案…</button></div>`;
+ const tiles=S.unfinished?'<div class="empty">迁移未完成时不扫描变化。</div>':`<div class="tiles">${TILES.map(([k,t])=>`<button class="tile ${c[k].length?'':'zero'} ${S.tab===k?'on':''}" data-a="tab" data-v="${k}"><b>${c[k].length}</b><span>${t}</span></button>`).join('')}</div>
+  ${S.tab&&c[S.tab].length?`<div class="list" style="margin-top:10px">${c[S.tab].map(p=>`<div class="li" data-a="ctx" data-v="${h(Array.isArray(p)?p[1]:p)}">${I('file','ic')}<span class="grow mono">${Array.isArray(p)?`${h(p[0])} → ${h(p[1])}`:h(p)}</span></div>`).join('')}</div>`:S.tab?'<div class="empty">没有这一类变化</div>':'<p class="hint">点击某一类查看路径。右键可在 Finder 中显示。</p>'}`;
+ const rounds=S.rounds.length||S.unpaired.length?`<div class="list">${S.rounds.map(r=>`<div class="li" data-a="openRound" data-v="${h(r.name)}"><span class="grow">${h(r.name)}</span>${stageBadge(r)}</div>`).join('')}${S.unpaired.map(p=>`<div class="li" data-a="go" data-v="organize"><span class="grow">${h(p.name)} <span class="muted tiny">未关联计划</span></span><span class="badge warn">${h(p.stage)}</span></div>`).join('')}</div>`:'<div class="empty">没有进行中的整理轮次</div>';
+ const bd=`<div class="list">${BOUNDARY.map(([k,p,t])=>`<div class="li"><span class="badge"><b>${k}</b></span><span class="grow mono">${h(p)}</span><span class="muted tiny">${h(t)}</span></div>`).join('')}</div>`;
+ return {main:`${hero}<div class="cols"><section><h3>磁盘变化（相对基线）</h3>${tiles}<h3>冲突</h3><div class="muted">无</div></section>
+  <section><h3>进行中的整理轮次</h3>${rounds}<h3>扫描边界</h3>${bd}</section></div>`,
+  insp:`<h4>Workspace</h4><dl class="kv"><dt>根目录</dt><dd class="mono">${h(ROOT)}</dd><dt>状态</dt><dd>${h(w.label)}</dd><dt>节点</dt><dd>4 个目录，7 个文件</dd><dt>基线</dt><dd class="mono">sha256:5c1e…</dd><dt>Git</dt><dd class="mono">${h(S.commits[0][0])}</dd></dl>
+  <button class="btn sm" data-a="toast" data-v="在 Finder 中显示 Workspace">在 Finder 中显示</button>`};
+}
+// ---------- 结构 ----------
+const kids=id=>BASE.filter(n=>n.parent===id);
+const desc=id=>kids(id).flatMap(k=>[k,...desc(k.id)]);
+const FLAG={X:'敏感名称，不发送给 LLM，不能选为范围',P:'受保护的嵌套 Git 项目，不能选为范围，也不能整体移动'};
+function scopePreview(){
+ const ids=S.scope.size?[...S.scope]:BASE.filter(n=>!n.parent).map(n=>n.id),seen=new Set();
+ ids.forEach(id=>{desc(id).forEach(n=>seen.add(n.id));let p=byId[id];while(p){seen.add(p.id);p=byId[p.parent]}});
+ const nodes=[...seen].map(i=>byId[i]),ex=nodes.filter(n=>n.flag).length;
+ return {nodes:nodes.length-ex,files:nodes.filter(n=>!n.dir&&!n.flag).length,ex};
+}
+function structure(){
+ const ql=(S.q||'').toLowerCase(),hit=n=>!ql||n.name.toLowerCase().includes(ql)||desc(n.id).some(d=>d.name.toLowerCase().includes(ql));
+ const rows=[];const walk=(pid,d)=>kids(pid).filter(hit).forEach(n=>{rows.push([n,d]);if(n.dir&&(ql||S.open.has(n.id)))walk(n.id,d+1)});walk(null,0);
+ const tree=rows.map(([n,d])=>{const kidsN=kids(n.id).length;
+  const tw=n.dir&&kidsN?`<span class="tw" data-a="fold" data-v="${n.id}">${S.open.has(n.id)||ql?'▾':'▸'}</span>`:'<span class="tw"></span>';
+  const ck=n.dir?(n.flag?`<span class="lock" title="${h(FLAG[n.flag])}">${I('lock','ic')}</span>`:`<input type="checkbox" aria-label="选为范围" data-a="scope" data-v="${n.id}" ${S.scope.has(n.id)?'checked':''}>`):'<span style="width:17px"></span>';
+  const mk=n.flag?`<span class="badge ${n.flag==='X'?'bad':''}" title="${h(FLAG[n.flag])}">${I('lock','ic')}${n.flag==='X'?'敏感':'受保护'}</span>`:'';
+  return `<div class="tr" role="treeitem" aria-level="${d+1}" ${n.dir?`aria-expanded="${S.open.has(n.id)}"`:''} aria-selected="${S.sel===n.id}" data-a="sel" data-v="${n.id}" style="padding-left:${8+d*18}px">
+   <span class="nm">${tw}${ck}${I(n.dir?'folder':'file','ic')}<span>${h(n.name)}${n.dir?'/':''}</span></span><span class="ds">${h(n.desc)}</span><span class="mk">${mk}</span></div>`}).join('');
+ const sp=scopePreview(),names=[...S.scope].map(i=>pathOf(i));
+ const n=S.sel&&byId[S.sel];
+ const insp=n?`<h4>${h(n.name)}${n.dir?'/':''}</h4><dl class="kv"><dt>类型</dt><dd>${n.dir?'目录':'文件'}</dd><dt>路径</dt><dd class="mono">${h(pathOf(n.id))}</dd>
+  <dt>ID</dt><dd class="mono">${h(n.id)} <button class="btn sm" data-a="toast" data-v="已拷贝 ${h(n.id)}">拷贝</button></dd>${n.desc?`<dt>说明</dt><dd>${h(n.desc)}</dd>`:''}
+  ${n.dir?`<dt>子项</dt><dd>${kids(n.id).filter(k=>k.dir).length} 个目录，${kids(n.id).filter(k=>!k.dir).length} 个文件</dd>`:''}
+  <dt>LLM</dt><dd>${n.flag?h('已排除：'+FLAG[n.flag]):'可发送名称与路径'}</dd></dl>
+  <div class="row"><button class="btn sm" data-a="toast" data-v="在 Finder 中显示 ${h(pathOf(n.id))}">在 Finder 中显示</button><button class="btn sm" data-a="toast" data-v="已拷贝相对路径">拷贝相对路径</button></div>`:'';
+ return {main:`<div class="row" style="margin-bottom:10px"><h2 style="flex:1">基线结构</h2><span class="muted tiny">只读 · 来自 structure.tree</span>
+  <input class="search" type="search" placeholder="按名称过滤（⌘F）" value="${h(S.q||'')}" data-in="q" aria-label="按名称过滤"></div>
+  <div class="tree" role="tree" aria-label="基线结构">${tree||'<div class="empty">没有匹配的节点</div>'}</div>
+  <div class="scope">${I('check','ic')}<span style="flex:1"><b>范围</b>：${S.scope.size?h(names.join('、')):'整个工作区'}　<span class="muted">将发送 ${sp.nodes} 个节点的名称与路径（含只读祖先），${sp.files} 个可分类文件；${sp.ex} 个已排除</span></span>
+  <button class="btn sm" data-a="clearScope" ${S.scope.size?'':'disabled'}>清除</button><button class="btn sm pri" data-a="chat" ${canDraft()?'':`disabled title="${h(blocked())}"`}>以所选范围新建 LLM 草案…</button></div>`,insp};
+}
+// ---------- TreeSpec 极简解析（示例用；真实实现调用库的 parse_tree_with_base / compare_trees） ----------
+function parse(text){
+ const lines=text.split('\n'),nodes=[],errs=[],stack=[];
+ lines.forEach((ln,i)=>{const no=i+1;if(!ln.trim()||/^\s*#/.test(ln))return;
+  if(ln.startsWith('!tree')){if(ln!=='!tree 1')errs.push([no,'只支持 !tree 1']);return}
+  const m=ln.match(/^( *)("(?:[^"\\]|\\.)*"|[^ @#/][^@#]*?)(\/)?(?: @([A-Za-z0-9_-]+))?(?: #\s?(.*))?$/);
+  if(!m){errs.push([no,'无法解析这一行']);return}
+  const sp=m[1].length,d=sp/2;
+  if(sp%2||d>stack.length){errs.push([no,'缩进必须是两个空格一层，且不能跳级']);return}
+  stack.length=d;const parent=d?stack[d-1]:null;
+  if(parent!=null&&!nodes[parent].dir){errs.push([no,'文件不能有子节点']);return}
+  const name=m[2].trim().replace(/^"|"$/g,'');
+  nodes.push({no,d,name,dir:!!m[3],id:m[4]||null,desc:(m[5]||'').trim(),parent});stack.push(nodes.length-1);
+ });
+ return {nodes,errs};
+}
+function check(text){
+ const {nodes,errs}=parse(text),seen=new Set(nodes.map(n=>n.id).filter(Boolean)),marks=[],ops=[];
+ const pid=n=>n.parent==null?null:nodes[n.parent].id,path=n=>(n.parent==null?'':path(nodes[n.parent])+'/')+n.name;
+ nodes.forEach(n=>{const b=n.id&&byId[n.id];
+  if(!n.id){marks.push(n.dir?'+':'!');if(n.dir)ops.push(['mkdir',path(n).replace(/^\//,'')]);return}
+  if(!b){marks.push(n.dir?'+':'!');if(n.dir)ops.push(['mkdir',path(n).replace(/^\//,'')]);return}
+  if(b.parent!==pid(n)){marks.push('>');ops.push([n.dir?'move_directory':'move_file',pathOf(n.id),path(n).replace(/^\//,'')]);return}
+  if(b.name!==n.name){marks.push('~');ops.push([n.dir?'move_directory':'move_file',pathOf(n.id),path(n).replace(/^\//,'')]);return}
+  marks.push(b.desc!==n.desc?'#':'');
+ });
+ const missing=BASE.filter(b=>!seen.has(b.id)),newFiles=nodes.filter(n=>!n.dir&&!(n.id&&byId[n.id]));
+ return {nodes,errs,marks,ops,missing,newFiles};
+}
+
+// ---------- 整理 ----------
+function organize(){
+ const list=`<nav class="rounds" aria-label="整理轮次"><h6>轮次</h6>${S.rounds.map(r=>`<button class="rd" data-a="round" data-v="${h(r.name)}" ${r.name===S.round?'aria-current="true"':''}>
+  <b>${h(r.name)}${r.text!==r.saved?' •':''}</b><div class="row">${stageBadge(r)}${r.ack&&!r.plan?'<span class="badge rev">需确认审核</span>':''}<span class="muted tiny">${r.src}</span></div></button>`).join('')||'<div class="empty">没有草案</div>'}
+  ${S.unpaired.length?`<h6>未关联计划</h6>${S.unpaired.map(p=>`<div class="rd"><b>${h(p.name)}</b><div class="row"><span class="badge warn">${h(p.stage)}</span></div></div>`).join('')}`:''}
+  <div class="foot"><button class="btn sm" data-a="newMenu" ${canDraft()?'':`disabled title="${h(blocked())}"`}>＋ 新建</button><button class="btn sm" data-a="archiveAll" ${pendingCount()?'':'disabled'}>全部归档…</button></div></nav>`;
+ const r=cur();
+ if(!r) return {main:`<div class="org">${list}<div class="detail"><div class="empty" style="padding-top:120px">${S.rounds.length?'选择一个轮次':'没有进行中的整理轮次。'}<br><br>${canDraft()?'<button class="btn pri" data-a="chat">新建 LLM 草案…</button> <button class="btn" data-a="copy">复制当前结构为草案…</button>':h(blocked()||'')}</div></div></div>`};
+ const segs=[['review','审核',1],['edit','编辑',!!r.text],['plan','计划',1],['report','报告',r.src==='LLM']];
+ if(!segs.find(s=>s[0]===S.seg&&s[2]))S.seg='review';
+ const order=['草案','审核','计划','执行','归档'],at=r.stage==='已执行'?4:r.stage==='可执行'?3:S.seg==='plan'?2:1;
+ const steps=order.map((t,i)=>`<span class="${i<at?'done':i===at?'cur':''}"><i>${i<at?'✓':i+1}</i>${t}</span>`).join('<em></em>');
+ const body=({review:reviewSeg,edit:editSeg,plan:planSeg,report:reportSeg})[S.seg](r);
+ return {main:`<div class="org">${list}<div class="detail"><div class="steps" aria-label="进度">${steps}</div>
+  <div class="row" style="margin-bottom:6px"><h2 style="flex:1">${h(r.name)}</h2><div class="seg" role="tablist">${segs.map(([k,t,ok])=>`<button role="tab" data-a="seg" data-v="${k}" aria-pressed="${S.seg===k}" ${ok?'':'disabled'}>${t}</button>`).join('')}</div></div>
+  ${body.main}</div></div>`,insp:body.insp};
+}
+const PAPERS_TEXT=`# organizer-review-v1: 6f1d2c0e-91b4-4c55-a0d2-3e8c41f7b9aa
+!tree 1
+
+Inbox/ @d_2b81e0c4 # 暂未分类
+  scan_0412.pdf @f_91c2aa07
+  todo.txt @f_c0d4e911
+Projects/ @d_5e0f7d21
+  tool/ @d_a83c1f02
+Research/ @d_7f3c0b55 # 科研资料
+  Papers/ @d_7f3c9a12 # 学术论文（按主题）
+    C2Rust/ @d_c2a1e7f0
+      CRUSH.pdf @f_1d9f6c3a
+    Security/ @d_5ec09b31
+      ASLR.pdf @f_44e1b2d0
+    notes.pdf @f_e27a5b18
+.env @f_0ab3c9e6
+`;
+function treeRows(rows,selKey){
+ let keep=rows.map(()=>true);
+ if(S.only){keep=rows.map(r=>!!r.mark);for(let i=rows.length-1;i>=0;i--)if(keep[i])for(let j=i-1,d=rows[i].d;j>=0&&d>0;j--)if(rows[j].d<d){keep[j]=true;d=rows[j].d}}
+ return rows.filter((_,i)=>keep[i]).map(r=>{const m=MARK[r.mark];
+  return `<div class="tr two" role="treeitem" aria-level="${r.d+1}" aria-selected="${S.rsel===r.name}" data-a="rsel" data-v="${h(r.name)}" style="padding-left:${12+r.d*18}px">
+  <span class="nm">${I(r.dir?'folder':'file','ic')}<span>${h(r.name)}${r.dir?'/':''}</span>${r.flag?`<span class="lock" title="${h(FLAG[r.flag])}">${I('lock','ic')}</span>`:''}</span>
+  <span>${m?`<span class="badge ${m[0]}" title="${h(m[1])}"><b>${h(r.mark)}</b>${h(r.note||m[1])}</span>`:''}</span></div>`}).join('');
+}
+function reviewSeg(r){
+ if(r.stage==='已执行') return {main:`<div class="notice info">${I('info')}<span>这一轮已执行，目标结构与当前基线相同。草案和计划会阻止同步，用完后请归档。</span></div>
+  <div class="row"><button class="btn pri" data-a="archive" data-v="${h(r.name)}">归档本轮…</button></div>`};
+ let rows,miss=[];
+ if(r.src==='LLM') rows=REVIEW;
+ else{const c=check(r.saved);rows=c.nodes.map((n,i)=>({d:n.d,name:n.name,dir:n.dir,mark:c.marks[i],note:{'+':'新目录','>':'移到新目录','~':'改名','#':'说明变化','!':'无来源新文件'}[c.marks[i]],flag:byId[n.id]?.flag}));miss=c.missing}
+ const cnt=k=>rows.filter(x=>x.mark===k).length,chips=Object.keys(MARK).filter(cnt).map(k=>`<span class="badge ${MARK[k][0]}"><b>${k}</b>${MARK[k][1]} ${cnt(k)}</span>`).join(' ');
+ const ack=r.ack&&!r.plan?`<div class="notice">${I('warn')}<span><b>需确认审核：</b>${h(r.ack)}。生成计划前需要确认你已检查完整草案和报告；这一步不绕过路径、身份和冲突检查。</span></div>`:'';
+ const w=r.src==='LLM'&&S.rsel&&WHY[S.rsel];
+ const insp=w?`<h4>${h(S.rsel)}</h4><dl class="kv"><dt>旧路径</dt><dd class="mono">${h(w.old)}</dd><dt>新路径</dt><dd class="mono">${h(w.now)}</dd><dt>决定</dt><dd><span class="badge ${w.dec==='review'?'rev':'acc'}">${w.dec}</span></dd></dl>
+  <div class="quote">${h(w.why)}<small>模型输出，仅供参考</small></div>`:S.rsel?`<h4>${h(S.rsel)}</h4><div class="muted tiny">没有 LLM 分配记录。</div>`:'';
+ return {main:`${ack}<div class="row" style="margin:8px 0">${chips||'<span class="muted">与基线相比没有变化</span>'}<span class="sp"></span>
+  <label class="row tiny"><input type="checkbox" data-a="only" ${S.only?'checked':''}>只看变化</label></div>
+  <div class="tree" role="tree" aria-label="目标结构">${treeRows(rows)}</div>
+  ${miss.length?`<h3>目标中缺失的节点</h3><div class="list">${miss.map(b=>`<div class="li"><span class="badge bad"><b>!</b>缺失</span><span class="grow mono">${h(pathOf(b.id))}</span></div>`).join('')}</div>`:''}
+  <div class="row" style="margin-top:14px"><button class="btn" data-a="seg" data-v="edit">编辑草案</button><span class="sp"></span>
+  <button class="btn" data-a="archive" data-v="${h(r.name)}">归档本轮…</button><button class="btn pri" data-a="plan" data-v="${h(r.name)}" ${blocked()?`disabled title="${h(blocked())}"`:''}>${r.plan?'重新生成计划…':'生成计划…'}</button></div>`,insp};
+}
+function gutter(text,errs){const bad=new Set(errs.map(e=>e[0]));
+ return text.split('\n').map((_,i)=>`<div class="${bad.has(i+1)?'e':''} ${i===0&&text.startsWith('# organizer-review')?'ro':''}">${i+1}</div>`).join('')}
+function checkPanel(r){const c=check(r.text),n=k=>c.marks.filter(m=>m===k).length;
+ return `<div class="card chk"><b>${c.errs.length?'有 '+c.errs.length+' 处错误':'格式正确'}</b>
+ ${c.errs.length?`<ul>${c.errs.map(([l,m])=>`<li>第 ${l} 行：${h(m)}</li>`).join('')}</ul>`:''}
+ <ul><li>新目录 ${n('+')}</li><li>移动或改名 ${n('>')+n('~')}</li><li>说明变化 ${n('#')}</li></ul>
+ ${c.missing.length?`<div class="notice bad">${I('warn')}<span>将有 ${c.missing.length} 个节点缺失：${h(c.missing.map(b=>b.name).join('、'))}。计划会出现未解决项。保留所有已有的 @ID。</span></div>`:''}
+ ${c.newFiles.length?`<div class="notice bad">${I('warn')}<span>新增 ${c.newFiles.length} 个无来源文件。草案只能移动已有文件。</span></div>`:''}
+ <div class="hint">停止输入 300 ms 后检查，不写盘。</div></div>`}
+function editSeg(r){
+ const dirty=r.text!==r.saved,llm=r.src==='LLM';
+ return {main:`${llm?`<div class="notice">${I('info')}<span>第 1 行是审核标记，只读。编辑后生成计划需要确认审核。</span></div>`:''}
+ <div class="ed"><div class="code"><div class="gut" id="gut">${gutter(r.text,parse(r.text).errs)}</div>
+ <textarea id="src" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="草案原文" data-in="src">${h(r.text)}</textarea></div>
+ <div id="chk">${checkPanel(r)}</div></div>
+ <div class="row" style="margin-top:12px"><span class="muted tiny" id="dirty">${dirty?'有未保存的修改':'已保存'} · drafts/${h(r.name)}</span><span class="sp"></span>
+ <button class="btn" data-a="toast" data-v="用“设置 › 外部编辑器”中选择的应用打开 drafts/${h(r.name)}">用其他应用打开</button>
+ <button class="btn" data-a="revert" ${dirty?'':'disabled'}>还原</button><button class="btn pri" data-a="save" ${dirty?'':'disabled'}>保存 ⌘S</button></div>`,
+ insp:`<h4>编辑器</h4><dl class="kv"><dt>文件</dt><dd class="mono">drafts/${h(r.name)}</dd><dt>载入摘要</dt><dd class="mono">sha256:${llm?'b07e…':'e3a9…'}</dd></dl>
+ <div class="tiny muted">保存时库会确认文件仍是载入时的内容；不一致则拒绝保存，可以重新载入或另存为新草案。保存不做规范化，空行和注释都保留。</div>`};
+}
+function planSeg(r){
+ const p=r.plan,cmd=p&&`organizer apply ${q(ROOT+'/.organizer/plans/'+p.name)} --root ${q(ROOT)} --yes`;
+ if(!p) return {main:`<div class="empty" style="padding:60px 0">还没有计划。<br><br><button class="btn pri" data-a="plan" data-v="${h(r.name)}" ${blocked()?'disabled':''}>生成计划…</button></div>`};
+ const done=r.stage==='已执行';
+ return {main:`<div class="card"><dl class="kv" style="margin:0"><dt>计划</dt><dd class="mono">plans/${h(p.name)}　plan sha256:${h(p.sha)}…</dd>
+  <dt>预览</dt><dd>${done?'已执行':r.preview?`<span class="badge ok">${h(r.preview)} 通过</span> <span class="muted tiny">执行前会重新检查</span>`:'<span class="muted">尚未预览</span>'}</dd></dl></div>
+  <h3>操作（${p.ops.length}）</h3>${p.ops.length?`<div class="list"><table><thead><tr><th>#</th><th>类型</th><th>源 → 目标</th></tr></thead><tbody>${p.ops.map((o,i)=>`<tr><td>${i+1}</td><td class="mono">${o[0]}</td><td class="mono">${h(o[1])}${o[2]?'<br><span class="muted">→ '+h(o[2])+'</span>':''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted">只更新结构记录，没有文件操作。</div>'}
+  <h3>未解决</h3><div class="muted">无</div><h3>扫描边界</h3><div class="muted tiny">[P] Projects/tool（本计划不涉及）</div>
+  <div class="row" style="margin-top:16px"><button class="btn" data-a="export" ${done?'disabled':''}>导出脚本…</button><span class="sp"></span>
+  ${done?`<button class="btn pri" data-a="archive" data-v="${h(r.name)}">归档本轮…</button>`:`<button class="btn" data-a="dryrun" data-v="${h(r.name)}" ${blocked()?'disabled':''}>预览</button>
+  <button class="btn pri" data-a="apply" data-v="${h(r.name)}" ${blocked()?`disabled title="${h(blocked())}"`:''}>执行迁移…</button>`}</div>`,
+  insp:cmd&&!done?`<h4>等价命令</h4><div class="cmd">${h(cmd)}</div><p class="hint">执行时 GUI 先自动预览，再要求输入 apply。</p>`:''};
+}
+function reportSeg(){
+ return {main:`<div class="card"><dl class="kv" style="margin:0;grid-template-columns:110px 1fr"><dt>编辑数</dt><dd>3（2 个新目录，1 处说明）</dd><dt>读取正文</dt><dd>0 字节（未开启发送文本片段）</dd>
+  <dt>基线摘要</dt><dd class="mono">sha256:5c1e…</dd><dt>目标摘要</dt><dd class="mono">sha256:b07e…</dd></dl></div>
+  <h3>分配</h3><div class="list"><table><thead><tr><th>文件</th><th>决定</th><th>理由（模型输出）</th></tr></thead><tbody>${Object.entries(WHY).map(([f,w])=>`<tr><td class="mono">${h(f)}</td><td><span class="badge ${w.dec==='review'?'rev':'acc'}">${w.dec}</span></td><td>${h(w.why)}</td></tr>`).join('')}</tbody></table></div>
+  <h3>警告</h3><div class="muted">无</div>`};
+}
+// ---------- 历史、恢复、欢迎窗口、活动日志 ----------
+function history(){
+ const runs=S.unfinished?[[RUN.id,RUN.plan,RUN.status,RUN.done,RUN.total],...S.runs]:S.runs;
+ const tone={complete:'ok',failed:'bad',resolved:''};
+ return {main:`<h2>历史</h2><p class="sub">结构提交只记录 structure.tree，不包含文件内容。</p><div class="cols" style="margin-top:0">
+  <section><h3>结构提交</h3><div class="list">${S.commits.map(([c,k,t])=>`<div class="li"><span class="mono">${c}</span><span class="badge ${k==='refactor'?'acc':''}">${k}</span><span class="grow">${h(t)}</span></div>`).join('')}</div></section>
+  <section><h3>迁移运行</h3><div class="list">${runs.map(([id,p,st,d,t])=>`<div class="li" data-a="runsel" data-v="${id}"><span class="grow mono">${id}</span><span class="muted tiny">${d}/${t}</span><span class="badge ${tone[st]??'warn'}">${st}</span></div>`).join('')}</div></section></div>
+  <p class="hint">第三期：选中提交后查看当时的结构，并与当前基线比较。</p>`,
+  insp:S.runsel===RUN.id?`<h4>${RUN.id}</h4><dl class="kv"><dt>计划</dt><dd class="mono">${RUN.plan}</dd><dt>状态</dt><dd>failed</dd></dl><div class="err">${h(RUN.error)}</div>`:''};
+}
+function recovery(){
+ if(!S.unfinished) return {main:`<div class="empty" style="padding-top:120px">${I('check','ic')} 没有未完成的迁移。<br>迁移执行失败或被中断时，这里会显示逐步状态。</div>`};
+ return {main:`<div class="card hero bad"><div class="big">${I('warn')}</div><div style="flex:1"><h2>${RUN.id}</h2>
+  <div class="muted">状态 failed · 已确认 ${RUN.done}/${RUN.total} · plan ${RUN.plan}…</div></div></div>
+  <h3>错误</h3><div class="err">${h(RUN.error)}</div><div class="hint">${h(RUN.hint)}</div>
+  <h3>步骤</h3><div class="list"><table><thead><tr><th>#</th><th>状态</th><th>操作</th><th>当前磁盘</th></tr></thead><tbody>
+  ${RUN.steps.map(([st,op,a,b,disk],i)=>`<tr data-a="ctx" data-v="${h(a)}"><td>${i+1}</td><td><span class="badge ${st==='done'?'ok':'warn'}">${st}</span></td><td><span class="mono">${op}</span> <span class="mono">${h(a)}${b?' → '+h(b):''}</span></td><td>${disk}</td></tr>`).join('')}</tbody></table></div>
+  <div class="notice">${I('info')}<span>只读检查。pending 可能已经落盘但未确认，不要重新执行计划。部分完成的文件步骤需要人工核对；GUI 不提供续跑或回滚。“当前磁盘”只是供核对的提示，不代表身份确认。</span></div>
+  <div class="row"><button class="btn" data-a="refresh">重新检查</button><span class="sp"></span>
+  <span title="仅当全部步骤已确认且没有发布标记时可用"><button class="btn" disabled>补记 Git…</button></span>
+  <button class="btn pri" data-a="resolve">标记已人工处理…</button></div>`,
+  insp:`<h4>如何核对</h4><ol class="tiny" style="padding-left:16px;margin:0;line-height:1.7"><li>右键步骤，在 Finder 中查看源和目标。</li><li>把文件放到你想要的位置（可以手工移回）。</li><li>点击“标记已人工处理”。</li><li>归档这一轮，再同步，记录磁盘的实际状态。</li></ol>`};
+}
+function welcome(){
+ const rec=[['Workspace','~/Documents/Workspace','已同步','今天 10:42','clean'],['Scans','~/Downloads/Scans','未初始化','—','uninit'],['Thesis','~/Desktop/Thesis','迁移未完成','昨天','unfinished']];
+ return `<div class="win welcome"><div class="wl"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="appicon">${I('tree')}</div><h2>TreeSpec Organizer</h2><div class="muted">先看方案，再决定是否移动文件。</div>
+  <button class="btn pri" style="margin-top:8px" data-a="toast" data-v="系统“打开”面板（Rust 侧调用）">打开文件夹… ⌘O</button></div>
+  <div class="wr"><h3 style="margin-top:0">最近打开</h3><div class="list">${rec.map(([n,p,st,t,s])=>`<div class="li" data-a="scn" data-v="${s}">${I('folder','ic')}<span class="grow"><b>${n}</b><br><span class="muted tiny mono">${p}</span></span><span class="tiny muted">${st}<br>${t}</span></div>`).join('')}</div>
+  <div class="drop">把文件夹拖到这里，或拖到 Dock 图标上</div></div>${S.sheet?`<div class="veil">${sheet()}</div>`:''}</div>`;
+}
+function logView(){
+ return `<section class="log" aria-label="活动日志"><div class="hd"><span style="flex:1">活动日志（本次会话，只在内存中）</span><button class="btn sm" data-a="toast" data-v="已拷贝全部日志">拷贝</button></div>
+ ${S.logs.length?S.logs.map(([t,a,c,r])=>`<div class="en"><span class="muted">${t}</span><span>${h(a)}</span><code>${h(c)}</code><span class="badge ${r==='成功'?'ok':r==='失败'?'bad':''}">${h(r)}</span></div>`).join(''):'<div class="empty">还没有动作</div>'}</section>`;
+}
+// ---------- 工作表 ----------
+let OZ=ROOT+'/.organizer';
+const cmdBox=c=>`<div class="tiny muted" style="margin-top:12px">等价命令</div><div class="cmd">${h(c)}<button class="btn sm" data-a="toast" data-v="已拷贝等价命令">拷贝</button></div>`;
+const cancel=(t='取消')=>`<button class="btn" data-a="close" data-focus>${t}</button>`;
+const sh=(title,body,acts,note='')=>`<div class="sheet${S.anim?' anim':''}" role="dialog" aria-modal="true" aria-label="${h(title)}"><h3>${h(title)}</h3>${body}<div class="acts">${note?`<span class="muted">${note}</span>`:''}${acts}</div></div>`;
+function sheet(){
+ const k=S.sheet.k,v=S.sheet.v,f=S.form||{},r=S.rounds.find(x=>x.name===v);
+ if(k==='init') return sh('初始化这个文件夹',`<dl class="kv"><dt>根目录</dt><dd class="mono">/Users/me/Downloads/Scans</dd><dt>将创建</dt><dd class="mono">.organizer/（structure.tree、state/index.sqlite、.git）</dd></dl>
+  <p class="muted" style="margin:0">只读取文件名和元数据，不移动、不修改任何文件。</p>${cmdBox("organizer init --root '/Users/me/Downloads/Scans'")}`,cancel()+`<button class="btn pri" data-a="doInit">初始化</button>`,'Return 键 = 取消');
+ if(k==='sync'){const c=S.changes;return sh('同步磁盘变化',`<p class="muted" style="margin:0 0 8px">把以下在 TreeSpec Organizer 之外发生的变化记录到基线：</p>
+  <dl class="kv"><dt>新增</dt><dd>${c.added.length} 项</dd><dt>移动</dt><dd>${c.moved.length} 项（保留原 ID）</dd><dt>仅内容变化</dt><dd>${c.changed.length} 项（只更新扫描缓存）</dd><dt>缺失</dt><dd>${c.missing.length} 项</dd></dl>
+  <div class="notice info">${I('info')}<span>缺失只从结构快照移除，不删除磁盘文件，也无法恢复其内容。没有未知身份，不需要 --accept-unknown。</span></div>${cmdBox(`organizer sync --root ${q(ROOT)}`)}`,cancel()+`<button class="btn pri" data-a="doSync">同步</button>`,'Return 键 = 取消')}
+ if(k==='archiveAll'||k==='archive'){const files=k==='archive'?arcFiles(r):[...S.rounds.flatMap(arcFiles),...S.unpaired.map(p=>'plans/'+p.name)];
+  return sh(k==='archive'?`归档 ${v}`:'全部归档',`<p class="muted" style="margin:0 0 8px">以下文件将移到 <span class="mono">.organizer/archive/20261105T1046Z-${h(k==='archive'?v:'all')}/</span>，不删除，不覆盖：</p>
+  <div class="list">${files.map(x=>`<div class="li">${I('file','ic')}<span class="grow mono">${h(x)}</span></div>`).join('')}</div>
+  ${cmdBox(`organizer archive --root ${q(ROOT)} ${k==='archive'?files.filter(x=>!x.endsWith('.review.json')).map(q).join(' '):'--all'}`)}`,cancel()+`<button class="btn pri" data-a="doArchive" data-v="${h(v||'')}">归档 ${files.length} 个文件</button>`,'Return 键 = 取消')}
+ if(k==='new') return sh('新建草案',`<div class="row" style="align-items:stretch">
+  <button class="card" style="flex:1;text-align:left;cursor:default" data-a="chat" ${LLM?'':'disabled'}><b>用 LLM 生成</b><div class="muted tiny">描述想要的整理方式，模型提出完整的目标结构和文件归属。</div></button>
+  <button class="card" style="flex:1;text-align:left;cursor:default" data-a="copy"><b>复制当前结构</b><div class="muted tiny">在 drafts/ 下新建一份基线副本，用内置编辑器修改。</div></button></div>`,cancel());
+ if(k==='copy') return sh('复制当前结构为草案',`<div class="fld"><span>文件名</span><span><input class="inp mono" value="${h(f.name??'new.tree')}" data-in="name" aria-label="文件名"><span class="hint">只新建，不覆盖。已存在时改用 new-2.tree。</span></span></div>
+  ${cmdBox(`cp -n ${q(OZ+'/structure.tree')} ${q(OZ+'/drafts/'+(f.name??'new.tree'))}`)}`,cancel()+`<button class="btn pri" data-a="doCopy">创建并编辑</button>`);
+ if(k==='plan'){const name=(r.ack?v.replace(/\.tree$/,'.reviewed.json'):v.replace(/\.tree$/,'.json'));
+  return sh(`为 ${v} 生成计划`,`${r.ack?`<div class="notice">${I('warn')}<span><b>需确认审核：</b>${h(r.ack)}。</span></div>
+  <label class="ck"><input type="checkbox" data-a="ack" ${f.ack?'checked':''}><span>我已检查完整草案和报告；未分类文件保持原有归属。<br><span class="muted tiny">这一步不绕过路径、身份、源文件和冲突检查。</span></span></label>`:''}
+  <div class="fld"><span>输出</span><span class="mono">plans/${h(name)}</span></div>
+  ${cmdBox(`organizer plan --root ${q(ROOT)} --from ${q(OZ+'/structure.tree')} --to ${q(OZ+'/drafts/'+v)}${r.ack?' --acknowledge-review':''} --out ${q(OZ+'/plans/'+name)}`)}`,
+  cancel()+`<button class="btn pri" data-a="doPlan" data-v="${h(v)}" ${r.ack&&!f.ack?'disabled':''}>生成计划</button>`)}
+ if(k==='chat'){const req=f.req??'在 Papers 下按主题建子目录并归类论文',bytes=new TextEncoder().encode(req).length,sp=scopePreview(),out=f.out??'chat_3fa1c09d.tree';
+  if(f.wait) return sh('正在生成草案',`<div class="prog"><i style="width:${f.wait}%"></i></div><p class="muted" style="margin:0">已用 ${Math.round(f.wait/10)} 秒。一次请求最多调用模型 4 次，每次最长 30 秒；等待期间不能取消。窗口其他部分仍可浏览。</p>`,'');
+  return sh('新建 LLM 草案',`<div class="fld"><span>请求</span><span><textarea class="inp" data-in="req" aria-label="请求">${h(req)}</textarea><span class="hint">${bytes} / 8192 字节 · Return 换行，不会发送</span></span></div>
+  <div class="fld"><span>范围</span><span>${S.scope.size?h([...S.scope].map(pathOf).join('、')):'整个工作区'} <button class="btn sm" data-a="go" data-v="structure">更改…</button></span></div>
+  <label class="ck"><input type="checkbox" data-a="fcl" ${f.cl!==false?'checked':''}><span>允许重新分类已有文件 <span class="mono muted">--classify</span></span></label>
+  <label class="ck"><input type="checkbox" disabled><span class="muted">发送文本片段（单文件 4 KiB，整次 64 KiB）<br><span class="tiny">已被设置“禁止发送文本片段”关闭（ORGANIZER_LLM_NO_CONTENT=1）</span></span></label>
+  <div class="fld"><span>输出</span><span class="mono">drafts/${h(out)}</span></div>
+  <dl class="kv" style="margin-top:12px"><dt>将发送到</dt><dd>api.example.com（远程，HTTPS）</dd><dt>发送内容</dt><dd>范围内 ${sp.nodes} 个节点的名称、相对路径、ID、说明；不含文件正文；${sp.ex} 个敏感或受保护节点已排除</dd></dl>
+  ${cmdBox(`ORGANIZER_LLM_MODEL='gpt-x' ORGANIZER_LLM_API_KEY=<钥匙串中的密钥> organizer chat --root ${q(ROOT)}${[...S.scope].map(i=>' --scope '+i).join('')}${f.cl!==false?' --classify':''} --out ${q(OZ+'/drafts/'+out)} ${q(req)}`)}`,
+  cancel()+`<button class="btn pri" data-a="doChat" ${bytes&&bytes<=8192?'':'disabled'}>发送</button>`,'“发送”不是默认按钮')}
+ if(k==='apply'){const p=r.plan;
+  if(f.stage==='run') return sh('正在执行迁移',`<div class="prog"><i style="width:${100*f.k/p.ops.length}%"></i></div><p style="margin:0">第 ${f.k} / ${p.ops.length} 步：<span class="mono">${h(p.ops[Math.max(0,f.k-1)][0])} ${h(p.ops[Math.max(0,f.k-1)][1])}</span></p>
+   <p class="muted tiny">执行期间请不要改动该目录。没有取消按钮：部分完成的迁移无法续跑，通常比等它完成更糟。退出会被拦截。</p>`,'');
+  if(f.stage==='done') return sh('迁移完成',`<div class="hero ok" style="margin-bottom:10px"><div class="big">${I('check')}</div><div><b>已完成 ${p.ops.length} 个操作</b><div class="muted tiny">文件已在目标位置，结构历史已更新。</div></div></div>
+   <dl class="kv"><dt>run_id</dt><dd class="mono">run_c41e9a07</dd><dt>Git 提交</dt><dd class="mono">e19b2c4 refactor</dd></dl><p class="muted tiny">草案和计划仍在 drafts/、plans/ 中，会阻止同步。用完后归档。</p>`,
+   `<button class="btn" data-a="close" data-focus>完成</button><button class="btn pri" data-a="archive" data-v="${h(v)}">归档本轮…</button>`);
+  const kinds=p.ops.reduce((a,o)=>(a[o[0]]=(a[o[0]]||0)+1,a),{});
+  return sh('执行迁移',`<dl class="kv"><dt>根目录</dt><dd class="mono">${h(ROOT)}</dd><dt>计划</dt><dd class="mono">plans/${h(p.name)}</dd>
+  <dt>操作</dt><dd>${p.ops.length} 个：${h(Object.entries(kinds).map(([a,b])=>b+' '+a).join('，'))}</dd><dt>预览</dt><dd><span class="badge ok">刚刚通过</span></dd></dl>
+  <div class="notice">${I('warn')}<span>只创建目录和移动文件，不删除、不覆盖。任一步失败立即停止，已完成的移动不会自动回滚。执行期间请不要改动该目录。</span></div>
+  ${cmdBox(`organizer apply ${q(OZ+'/plans/'+p.name)} --root ${q(ROOT)} --yes`)}
+  <div class="fld" style="margin-top:12px"><span>确认</span><span><input class="inp mono" placeholder="输入 apply" data-in="typed" value="${h(f.typed||'')}" aria-label="输入 apply 确认" autocomplete="off" spellcheck="false"></span></div>`,
+  cancel()+`<button class="btn danger" data-a="doApply" data-v="${h(v)}" ${f.typed==='apply'?'':'disabled'}>执行</button>`,'输入 apply 后才能执行')}
+ if(k==='resolve') return sh(`标记 ${RUN.id} 已人工处理`,`<p style="margin:0 0 8px">只修改操作日志，不移动文件，不修改基线、索引或 Git。这份计划之后永远不能再执行。</p>
+  <label class="ck"><input type="checkbox" data-a="ack" ${f.ack?'checked':''}><span>我已人工核对每个步骤的源和目标</span></label>
+  <p class="muted tiny">之后先归档这一轮，再同步，记录磁盘的实际状态。</p>${cmdBox(`organizer recover ${RUN.id} --root ${q(ROOT)} --mark-resolved`)}`,
+  cancel()+`<button class="btn pri" data-a="doResolve" ${f.ack?'':'disabled'}>标记已处理</button>`,'Return 键 = 取消');
+ if(k==='export') return sh('导出脚本',`<div class="fld"><span>文件名</span><span class="mono">plans/${h(cur().plan.name.replace(/\.json$/,'.sh'))}</span></div><p class="muted tiny">脚本只调用不带 --yes 的 organizer apply，与 CLI 相同。</p>`,cancel()+`<button class="btn pri" data-a="doExport">导出</button>`);
+ if(k==='settings') return sh('设置',`<h3 style="margin-top:6px">LLM</h3>
+  <div class="fld"><span>服务地址</span><input class="inp mono" value="https://api.example.com/v1" aria-label="服务地址"></div>
+  <div class="fld"><span>模型</span><input class="inp mono" value="gpt-x" aria-label="模型"></div>
+  <div class="fld"><span>API Key</span><span class="row"><span class="badge ok">已保存在钥匙串</span><button class="btn sm">替换…</button><button class="btn sm">移除</button></span></div>
+  <label class="ck"><input type="checkbox"><span>只允许本地服务（loopback）</span></label>
+  <label class="ck"><input type="checkbox" checked disabled><span>禁止发送文本片段 <span class="badge">由环境变量 ORGANIZER_LLM_NO_CONTENT=1 设置</span></span></label>
+  <label class="ck"><input type="checkbox"><span>禁用 LLM（只用手工草案）</span></label>
+  <p class="muted tiny">不提供“测试连接”：它会在你确认发送内容之前联网。配置在打开“新建 LLM 草案”时离线校验。</p>
+  <h3>通用</h3><div class="fld"><span>外部编辑器</span><span class="row"><span class="muted">未设置</span><button class="btn sm">选择应用…</button></span></div>
+  <label class="ck"><input type="checkbox"><span>窗口激活时自动重新扫描（默认关闭；扫描大目录可能较慢）</span></label>
+  <label class="ck"><input type="checkbox" checked><span>启动时重新打开上次的工作区</span></label>
+  <h3>高级</h3><div class="fld"><span>Git</span><span><span class="badge ok">/usr/bin/git · 命令行工具已安装</span></span></div>`,
+  `<button class="btn" data-a="toast" data-v="已拷贝诊断信息（不含 API Key 和文件路径）">拷贝诊断信息</button><button class="btn pri" data-a="close" data-focus>完成</button>`);
+ return '';
+}
+
+// ---------- 动作（示例中只改内存状态；真实实现交给 worker，库重新检查一切） ----------
+const log=(a,c,r='成功')=>S.logs.unshift([now(),a,c,r]);
+let toastT;
+function toast(t){clearTimeout(toastT);let el=document.getElementById('toast');
+ if(!el){el=document.createElement('div');el.id='toast';el.setAttribute('role','status');
+  el.style.cssText='position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:rgba(30,30,32,.92);color:#fff;padding:8px 14px;border-radius:9px;font-size:12.5px;z-index:9;max-width:80vw';
+  document.body.appendChild(el)}
+ el.textContent=t;el.hidden=false;toastT=setTimeout(()=>el.hidden=true,2400);
+}
+const open=(k,v,form={})=>{S.sheet={k,v};S.form=form;S.anim=true;render();S.anim=false};
+const close=()=>{S.sheet=null;S.form={};render()};
+function scenario(s){
+ Object.assign(S,{scn:s,sheet:null,form:{},rounds:freshRounds(),unpaired:[{name:'old.json',stage:'计划已过期'}],round:'papers.tree',seg:'review',rsel:null,tab:null,
+  changes:CHANGES[s==='changed'?'changed':'clean'],unfinished:s==='unfinished',uninit:s==='uninit',runsel:null});
+ S.rounds.forEach(r=>{if(r.name==='papers.tree'){r.text=PAPERS_TEXT;r.saved=PAPERS_TEXT}});
+ ROOT=s==='uninit'?'/Users/me/Downloads/Scans':'/Users/me/Documents/Workspace';OZ=ROOT+'/.organizer';
+ if(s==='unfinished'){S.page='recovery';S.rounds=S.rounds.filter(r=>r.name==='papers.tree');S.unpaired=[];
+  Object.assign(S.rounds[0],{ack:null,stage:'可执行',preview:'10:45',plan:{name:'papers.reviewed.json',ops:PAPERS_OPS,sha:'41a9d0e3'}})}
+ else if(s==='changed'){S.page='overview';S.tab='added'}
+ else S.page=s==='clean'?'organize':'overview';
+ render();
+}
+const arcFiles=r=>['drafts/'+r.name,...(r.src==='LLM'?['drafts/'+r.name+'.review.json']:[]),...(r.plan?['plans/'+r.plan.name]:[])];
+function baseText(){const out=['!tree 1',''];const walk=(pid,d)=>BASE.filter(n=>n.parent===pid).sort((a,b)=>(b.dir-a.dir)||(a.name<b.name?-1:1))
+ .forEach(n=>{out.push('  '.repeat(d)+n.name+(n.dir?'/':'')+' @'+n.id+(n.desc?' # '+n.desc:''));walk(n.id,d+1)});walk(null,0);return out.join('\n')+'\n'}
+function opsFor(r){return r.src==='LLM'?PAPERS_OPS:check(r.saved).ops}
+const ACT={
+ scn:(v)=>scenario(v), theme:(v)=>{S.theme=v;render()},
+ go:(v)=>{if((S.uninit&&v!=='overview')||(v==='recovery'&&!S.unfinished)){toast(S.uninit?'先初始化这个文件夹':'没有未完成的迁移');return}S.page=v;S.sheet=null;render()},
+ refresh:()=>{S.scanned=now();toast(S.unfinished?'已重新检查，状态未变化':'已重新扫描（只读）');render()},
+ log:()=>{S.log=!S.log;render()}, insp:()=>{S.insp=!S.insp;render()}, settings:()=>open('settings'),
+ tab:(v)=>{S.tab=S.tab===v?null:v;render()}, ctx:(v)=>toast(`右键菜单：在 Finder 中显示 / 拷贝相对路径（${v}）`),
+ openRound:(v)=>{S.page='organize';S.round=v;render()}, round:(v)=>{S.round=v;S.rsel=null;render()},
+ seg:(v)=>{S.seg=v;render()}, rsel:(v)=>{S.rsel=v;render()}, sel:(v)=>{S.sel=v;render()}, runsel:(v)=>{S.runsel=v;render()},
+ fold:(v)=>{S.open.has(v)?S.open.delete(v):S.open.add(v);render()},
+ scope:(v,el)=>{el.checked?S.scope.add(v):S.scope.delete(v);render()}, clearScope:()=>{S.scope.clear();render()},
+ only:(v,el)=>{S.only=el.checked;render()}, ack:(v,el)=>{S.form.ack=el.checked;render()}, fcl:(v,el)=>{S.form.cl=el.checked;render()},
+ toast:(v)=>toast(v), close:()=>{if(S.form.stage==='run'||S.form.wait)return;close()},
+ newMenu:()=>open('new'), init:()=>open('init'), sync:()=>open('sync'), resolve:()=>open('resolve'),
+ archive:(v)=>open('archive',v), archiveAll:()=>open('archiveAll'), export:()=>open('export',S.round),
+ chat:()=>{if(!canDraft()){toast(blocked()||'现在不能新建草案');return}open('chat',null,{})},
+ copy:()=>{const used=new Set(S.rounds.map(r=>r.name));open('copy',null,{name:used.has('new.tree')?'new-2.tree':'new.tree'})},
+ plan:(v)=>{const r=S.rounds.find(x=>x.name===v);if(r.text!==r.saved){toast('先保存编辑器中的修改（⌘S），计划总是基于磁盘上的文件');return}open('plan',v)},
+ dryrun:(v)=>{const r=S.rounds.find(x=>x.name===v);r.preview=now();S.round=v;S.seg='plan';
+  log('预览',`organizer apply ${q(OZ+'/plans/'+r.plan.name)} --root ${q(ROOT)} --dry-run`);toast('预览通过。执行前会重新检查。');render()},
+ apply:(v)=>{const r=S.rounds.find(x=>x.name===v);if(!r.preview){r.preview=now();log('预览（执行前自动）',`organizer apply ${q(OZ+'/plans/'+r.plan.name)} --root ${q(ROOT)} --dry-run`)}open('apply',v,{typed:''})},
+ save:()=>{const r=cur();if(r.src==='LLM'&&r.text!==r.saved)r.ack='草案在生成后被编辑过';r.saved=r.text;
+  if(r.plan){S.unpaired.push({name:r.plan.name,stage:'未关联'});r.plan=null;r.preview=null}
+  const c=check(r.saved);r.stage=c.errs.length?'草案无效':(c.ops.length||r.src==='LLM')?'待计划':'无变化';
+  log('保存草案','GUI 内部操作（workspace::save_draft）');toast('已保存，未做规范化');render()},
+ revert:()=>{cur().text=cur().saved;render()},
+ doInit:()=>{log('初始化',"organizer init --root '/Users/me/Downloads/Scans'");Object.assign(S,{uninit:false,rounds:[],unpaired:[],sheet:null,commits:[['9a0c5e1','init','11 nodes']]});S.scanned=now();toast('初始化完成，没有移动任何文件');render()},
+ doSync:()=>{log('同步',`organizer sync --root ${q(ROOT)}`);S.commits.unshift(['c27d8f0','reconcile','2 added, 1 moved']);S.changes=CHANGES.clean;S.tab=null;S.scanned=now();close();toast('已同步。现在可以新建草案。')},
+ doArchive:(v)=>{const files=v?arcFiles(S.rounds.find(r=>r.name===v)):null;
+  log('归档',`organizer archive --root ${q(ROOT)} ${v?files.filter(x=>!x.endsWith('.review.json')).map(q).join(' '):'--all'}`);
+  if(v)S.rounds=S.rounds.filter(r=>r.name!==v);else{S.rounds=[];S.unpaired=[]}
+  S.round=S.rounds[0]?.name;close();toast('已归档到 .organizer/archive/，没有删除任何文件')},
+ doCopy:()=>{const name=S.form.name||'new.tree';if(S.rounds.some(r=>r.name===name)){toast(name+' 已存在，请换一个名称');return}
+  const t=baseText();S.rounds.push({name,src:'手工',stage:'无变化',ack:null,plan:null,preview:null,text:t,saved:t});
+  log('复制当前结构',`cp -n ${q(OZ+'/structure.tree')} ${q(OZ+'/drafts/'+name)}`);S.page='organize';S.round=name;S.seg='edit';close()},
+ doPlan:(v)=>{const r=S.rounds.find(x=>x.name===v),c=r.src==='LLM'?null:check(r.saved);
+  const cmd=`organizer plan --root ${q(ROOT)} --from ${q(OZ+'/structure.tree')} --to ${q(OZ+'/drafts/'+v)}${r.ack?' --acknowledge-review':''} --out …`;
+  if(c&&(c.missing.length||c.newFiles.length||c.errs.length)){log('生成计划',cmd,'有未解决项');close();toast('计划有未解决项，没有写入文件。回到编辑修正。');return}
+  const name=v.replace(/\.tree$/,r.ack?'.reviewed.json':'.json'),ops=opsFor(r);
+  r.plan={name,ops,sha:'41a9d0e3'};r.stage=ops.length?'可执行':'无需执行';r.preview=null;
+  log('生成计划',cmd);S.round=v;S.seg='plan';close()},
+ doApply:(v)=>{const r=S.rounds.find(x=>x.name===v);S.form={stage:'run',k:1};render();
+  const t=setInterval(()=>{if(S.form.k<r.plan.ops.length){S.form.k++;render();return}clearInterval(t);
+   r.stage='已执行';S.form={stage:'done'};S.commits.unshift(['e19b2c4','refactor',`apply plan sha256:41a9d0e3 (${v})`]);S.runs.unshift(['run_c41e9a07','sha256:41a9d0e3','complete',r.plan.ops.length,r.plan.ops.length]);
+   log('执行迁移',`organizer apply ${q(OZ+'/plans/'+r.plan.name)} --root ${q(ROOT)} --yes`);render()},650)},
+ doChat:()=>{S.form.wait=5;render();const t=setInterval(()=>{S.form.wait+=19;if(S.form.wait<100){render();return}clearInterval(t);
+  const name='chat_3fa1c09d.tree';if(!S.rounds.some(r=>r.name===name))S.rounds.unshift({name,src:'LLM',stage:'待计划',ack:'有 1 个待审核项',plan:null,preview:null,text:PAPERS_TEXT,saved:PAPERS_TEXT});
+  log('生成 LLM 草案',`organizer chat --root ${q(ROOT)} --classify --out ${q(OZ+'/drafts/'+name)} …`,'有待审核项');
+  S.page='organize';S.round=name;S.seg='review';S.rsel='notes.pdf';close();toast('草案已生成，有 1 个待审核项，已选中')},400)},
+ doResolve:()=>{log('标记已人工处理',`organizer recover ${RUN.id} --root ${q(ROOT)} --mark-resolved`);S.runs.unshift([RUN.id,RUN.plan,'resolved',RUN.done,RUN.total]);
+  Object.assign(S,{unfinished:false,changes:{added:[],missing:[],moved:[['Research/Papers/CRUSH.pdf','Research/Papers/C2Rust/CRUSH.pdf']],changed:[],unknown:[]},page:'overview',tab:'moved'});
+  S.rounds.forEach(r=>{r.stage='计划已过期';r.plan=r.plan||{name:'papers.reviewed.json',ops:PAPERS_OPS,sha:'41a9d0e3'}});close();toast('已关闭这次运行。下一步：归档，再同步。')},
+ doExport:()=>{log('导出脚本',`organizer export-script ${q(OZ+'/plans/'+cur().plan.name)} --out ${q(OZ+'/plans/'+cur().plan.name.replace(/\.json$/,'.sh'))}`);close();toast('已导出。脚本只调用不带 --yes 的 apply。')},
+};
+// ---------- 事件 ----------
+document.addEventListener('click',e=>{
+ const el=e.target.closest('[data-a]');if(!el||el.disabled||el.getAttribute('aria-disabled')==='true'&&el.dataset.a!=='go')return;
+ if(el.tagName==='LABEL')return;
+ const f=ACT[el.dataset.a];if(f){if(el.tagName!=='INPUT')e.preventDefault();f(el.dataset.v,el)}
+});
+function keepFocus(sel,fn){const a=document.activeElement,s=a.selectionStart,en=a.selectionEnd;fn();const b=document.querySelector(sel);if(b){b.focus();try{b.setSelectionRange(s,en)}catch(_){}}}
+document.addEventListener('input',e=>{
+ const k=e.target.dataset.in;if(!k)return;
+ if(k==='src'){const r=cur(),ta=e.target;
+  if(r.src==='LLM'){const first=r.saved.split('\n')[0];if(!ta.value.startsWith(first+'\n')){const p=ta.selectionStart;ta.value=first+'\n'+ta.value.split('\n').slice(1).join('\n');ta.selectionStart=ta.selectionEnd=p;toast('第 1 行是审核标记，不能修改')}}
+  r.text=ta.value;clearTimeout(S.chkT);
+  document.getElementById('gut').innerHTML=gutter(r.text,parse(r.text).errs);
+  S.chkT=setTimeout(()=>{const c=document.getElementById('chk');if(c)c.innerHTML=checkPanel(r);
+   document.querySelector('[data-a=save]').disabled=document.querySelector('[data-a=revert]').disabled=r.text===r.saved;
+   document.getElementById('dirty').textContent=(r.text===r.saved?'已保存':'有未保存的修改')+' · drafts/'+r.name},300);return}
+ if(e.isComposing)return;                    // 输入法组合期间不重绘
+ if(k==='q'){S.q=e.target.value;keepFocus('[data-in=q]',render);return}
+ S.form[k]=e.target.value;keepFocus(`[data-in=${k}]`,render);
+});
+document.addEventListener('compositionend',e=>{if(e.target.dataset?.in&&e.target.dataset.in!=='src')e.target.dispatchEvent(new Event('input',{bubbles:true}))});
+document.addEventListener('scroll',e=>{if(e.target.id==='src')document.getElementById('gut').scrollTop=e.target.scrollTop},true);
+document.addEventListener('keydown',e=>{
+ if(e.isComposing||e.keyCode===229)return;   // Return/Esc 交给输入法
+ if(S.sheet){if(e.key==='Escape'){e.preventDefault();ACT.close();return}
+  if(e.key==='Enter'&&e.target.tagName==='INPUT'&&e.target.type!=='checkbox'){e.preventDefault();return}   // 文本框中的 Return 不触发任何按钮
+  if(e.key==='Enter'&&e.target.tagName!=='TEXTAREA'){e.preventDefault();ACT.close();return}}             // 其他位置 Return = 取消
+ if(e.metaKey&&e.key>='1'&&e.key<='5'){e.preventDefault();ACT.go(PAGES[e.key-1][0]);return}
+ if(e.metaKey&&e.key==='s'&&S.page==='organize'&&S.seg==='edit'){e.preventDefault();if(cur().text!==cur().saved)ACT.save();return}
+ const el=e.target.closest?.('[data-a]');
+ if(el&&(e.key==='Enter'||e.key===' ')&&!['BUTTON','INPUT','TEXTAREA','LABEL'].includes(el.tagName)){e.preventDefault();el.click()}
+});
+scenario('clean');
+</script>
+</body>
+</html>

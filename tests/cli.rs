@@ -35,6 +35,10 @@ fn help_and_version_are_usable() {
             .status
             .success()
     );
+    // The TUI refuses to start without an interactive terminal.
+    let tui = run(temp.path(), &["tui"]);
+    assert!(!tui.status.success());
+    assert!(String::from_utf8_lossy(&tui.stderr).contains("interactive terminal"));
 }
 
 #[test]

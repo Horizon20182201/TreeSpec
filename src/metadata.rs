@@ -193,8 +193,9 @@ pub(crate) fn layout_files(metadata: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn draft_conflicts(metadata: &Path) -> Result<Vec<String>> {
-    let mut conflicts = Vec::new();
+/// Entries in `drafts/` and `plans/` that block `sync`, as (directory, name).
+pub(crate) fn pending_entries(metadata: &Path) -> Result<Vec<(&'static str, std::ffi::OsString)>> {
+    let mut entries = Vec::new();
     for directory in ["drafts", "plans"] {
         for entry in fs::read_dir(metadata.join(directory))? {
             let entry = entry?;
@@ -205,9 +206,17 @@ pub(crate) fn draft_conflicts(metadata: &Path) -> Result<Vec<String>> {
                     continue;
                 }
             }
-            conflicts.push(format!("pending {directory} entry {:?}; review and archive it outside drafts/plans before sync", entry.file_name()));
+            entries.push((directory, entry.file_name()));
         }
     }
+    Ok(entries)
+}
+
+pub(crate) fn draft_conflicts(metadata: &Path) -> Result<Vec<String>> {
+    let mut conflicts: Vec<_> = pending_entries(metadata)?
+        .into_iter()
+        .map(|(directory, name)| format!("pending {directory} entry {name:?}; review and archive it outside drafts/plans before sync"))
+        .collect();
     conflicts.sort();
     Ok(conflicts)
 }

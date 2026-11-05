@@ -8,6 +8,7 @@ TreeSpec Organizer 是一个基于 Rust 的文件结构管理命令行工具。�
 - **先预览后执行**：查看完整目标结构和迁移计划，明确确认后才移动文件；目标已存在时拒绝覆盖。
 - **手工也能使用**：编辑结构文本即可规划迁移，无需模型服务或 API Key。
 - **保留结构历史**：记录整理前后的目录结构；文件正文不会提交到工具的 Git 仓库。
+- **终端界面**：`organizer tui` 在一个界面里完成下面的全部步骤，每次写操作前显示等价命令并要求确认。
 
 ## 安装
 
@@ -122,11 +123,21 @@ organizer history --root "$workspace"
 | 记录你在文件管理器中完成的调整 | `organizer sync --root "$workspace"` |
 | 查看本地结构历史 | `organizer history --root "$workspace"` |
 | 检查草案格式 | `organizer validate "$workspace/.organizer/drafts/new.tree"` |
+| 归档用完的草案和计划 | `organizer archive --root "$workspace" --all` |
+| 用终端界面完成整理 | `organizer tui --root "$workspace"`（按 `?` 查看键位） |
 | 查看某个命令的选项 | `organizer chat --help`、`organizer plan --help` |
 
 `sync` 记录已经发生的变化；要让工具按草案移动文件，使用 `plan` 和 `apply`。在受管理目录内运行时，大多数命令可以省略 `--root`。
 
-完成或放弃一轮整理后，把 `.organizer/drafts/`、`.organizer/plans/` 内的草案、配套审核报告和计划归档到 `.organizer/archive/` 等其他子目录，保留 `drafts/` 和 `plans/` 目录本身。有待处理草案或计划时，`sync` 会停止，避免与未完成的整理混淆。外部文件发生变化后，先同步，再基于最新结构生成草案和计划。
+完成或放弃一轮整理后，用 `organizer archive` 把 `.organizer/drafts/`、`.organizer/plans/` 内的草案、配套审核报告和计划移到 `.organizer/archive/`（可以只列出 `drafts/NAME`、`plans/NAME`，或用 `--all`）。归档不删除也不覆盖任何文件。有待处理草案或计划时，`sync` 会停止，避免与未完成的整理混淆。外部文件发生变化后，先同步，再基于最新结构生成草案和计划。
+
+### 终端界面
+
+```bash
+organizer tui --root "$workspace"
+```
+
+界面分为概览、结构、整理、历史、恢复五页，底栏始终给出下一步建议。整理页按 `n` 新建草案（LLM 或复制当前结构），`e` 用 `$EDITOR` 编辑，`p` 生成计划，`d` 预览，`A` 执行（需要输入 `apply` 确认），`z` 归档。TUI 只调用上面这些命令的同一套实现，不会绕过任何检查。未初始化的目录会先显示初始化页。设计说明见 [TUI 设计](docs/TUI_DESIGN.md)。
 
 ## LLM 会读取哪些信息？
 
@@ -152,7 +163,7 @@ organizer history --root "$workspace"
 - 执行器在两个平台都使用原子防覆盖移动：Linux 使用 `RENAME_NOREPLACE`，macOS 使用 `renameatx_np(RENAME_EXCL)`。文件系统不支持时报错停止，不会退化为可能覆盖的 `rename` 或 copy+delete。
 - macOS 会解析并记录 `/var`、`/tmp`、`/etc` 等系统路径别名后的真实根目录；根目录本身是符号链接时仍会拒绝。把输出写到系统别名之下时同样会解析真实目录。
 - Git 只记录结构，不备份文件正文，也不会因切换 Git 提交自动恢复真实目录。当前也不支持直接搬迁已初始化的管理根目录。
-- 执行失败时可能已有部分移动完成，工具会停止并保留记录。根据错误中给出的 `run_id` 使用 `organizer recover RUN_ID --root "$workspace"` 检查，不要直接重跑或删除 `.organizer/`。具体处理见 [恢复说明](docs/DEVELOPMENT.md#计划执行与恢复)。
+- 执行失败时可能已有部分移动完成，工具会停止并保留记录。根据错误中给出的 `run_id` 使用 `organizer recover RUN_ID --root "$workspace"` 检查，不要直接重跑或删除 `.organizer/`。人工核对并处理好磁盘上的文件后，用 `organizer recover RUN_ID --mark-resolved` 关闭这次运行，再归档、同步。TUI 的恢复页提供同样的检查和操作。具体处理见 [恢复说明](docs/DEVELOPMENT.md#计划执行与恢复)。
 - 命令主要输出 JSON；`chat` 或 `plan` 返回退出码 `2` 表示报告中仍有待审核或未解决项。模型拒答、网络错误、路径冲突等会明确报错，不会自动绕过检查。
 
 ## 更多文档

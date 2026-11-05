@@ -10,3 +10,4 @@ pub mod scan;
 pub mod storage;
 pub mod sync;
 pub mod tree;
+pub mod workspace;

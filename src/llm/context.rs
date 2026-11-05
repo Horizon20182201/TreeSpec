@@ -1,7 +1,7 @@
 use crate::{
     error::{Result, fail},
     migration::plan::within,
-    scan::{FileStamp, ScanSnapshot},
+    scan::{FileStamp, ScanIssue},
     storage::SavedState,
     tree::{NodeKind, TreeSpec, relative_paths},
 };
@@ -30,6 +30,17 @@ pub(crate) struct Scope {
     pub root_allowed: bool,
     pub nodes: Vec<NodeContext>,
     pub excluded_count: usize,
+    pub excluded: HashSet<String>,
+}
+
+/// Nodes never offered to the LLM: protected projects and sensitive names.
+pub(crate) fn excluded_ids(saved: &SavedState) -> HashSet<String> {
+    saved
+        .records
+        .iter()
+        .filter(|r| r.entry.protected || sensitive(&r.entry.path))
+        .map(|r| r.logical_id.clone())
+        .collect()
 }
 
 pub(crate) fn sensitive(path: &str) -> bool {
@@ -56,9 +67,11 @@ pub(crate) fn sensitive(path: &str) -> bool {
 }
 
 impl Scope {
+    /// `warnings` are the scan boundaries; they only mark directories that
+    /// must not be moved, so a preview may pass the indexed boundaries.
     pub(crate) fn new(
         saved: &SavedState,
-        snapshot: &ScanSnapshot,
+        warnings: &[ScanIssue],
         selected: &[String],
     ) -> Result<Self> {
         let paths = relative_paths(&saved.tree)?;
@@ -68,12 +81,7 @@ impl Scope {
             .iter()
             .map(|n| (n.id.as_str(), n))
             .collect();
-        let excluded: HashSet<_> = saved
-            .records
-            .iter()
-            .filter(|r| r.entry.protected || sensitive(&r.entry.path))
-            .map(|r| r.logical_id.clone())
-            .collect();
+        let excluded = excluded_ids(saved);
         let mut roots = vec![];
         let mut distinct = HashSet::new();
         for id in selected {
@@ -115,8 +123,7 @@ impl Scope {
                     && (excluded
                         .iter()
                         .any(|excluded| within(&paths[excluded], &paths[*id]))
-                        || snapshot
-                            .warnings
+                        || warnings
                             .iter()
                             .any(|warning| within(&warning.path, &paths[*id])))
             })
@@ -144,6 +151,7 @@ impl Scope {
             root_allowed: selected.is_empty(),
             nodes: context,
             excluded_count: excluded.len(),
+            excluded,
         })
     }
 }

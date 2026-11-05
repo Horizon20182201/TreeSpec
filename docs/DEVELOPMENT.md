@@ -1,10 +1,21 @@
-# TreeSpec Organizer 开发指南 — M3
+# TreeSpec Organizer 开发指南 — M3 + TUI
 
 本页保留各阶段的实现说明、接口、安全边界与测试方式。日常安装和使用请参阅 [用户指南](../README.md)。以下构建和测试命令均在仓库根目录执行。
 
-基于 Rust 的本地文件结构管理 CLI。已完成 **M0：TreeSpec v1 / ID Diff**、**M1：扫描 / 身份索引 / Git 结构同步**、**M2：安全迁移规划与执行**、**M3：LLM 结构草案与语义分类**。手工规划、执行和默认测试不需要 LLM Key。
+基于 Rust 的本地文件结构管理 CLI。已完成 **M0：TreeSpec v1 / ID Diff**、**M1：扫描 / 身份索引 / Git 结构同步**、**M2：安全迁移规划与执行**、**M3：LLM 结构草案与语义分类**，以及 **TUI 第一期**（`organizer tui`，设计见 [TUI 设计](TUI_DESIGN.md)）。手工规划、执行和默认测试不需要 LLM Key。
 
 需求见 [开发规范](TreeSpec_Organizer_MVP_Development_Spec.md)。工具只管理结构元数据，不把用户文件正文写进 Git。`sync` 记录已经发生的磁盘变化；`plan` 根据稳定 ID 规划路径变更，`apply --yes` 才执行真实移动。
+
+## TUI
+
+`organizer tui [--root PATH]` 把“初始化 → 草案 → 审核 → 计划 → 预览 → 执行 → 归档”放进一个终端界面。操作逻辑、状态模型和键位见 [TUI 设计](TUI_DESIGN.md)。
+
+```bash
+cargo run -- tui --root ./Workspace     # 五个页面：1 概览 2 结构 3 整理 4 历史 5 恢复；? 查看键位
+cargo build --no-default-features       # 不含 TUI 依赖（ratatui/crossterm）的纯 CLI
+```
+
+TUI 是二进制的一部分（`src/tui/`），只调用库的公开接口，用户文件仍然只由 `apply_plan` 移动，所有检查都在库内完成。每个写动作的确认框显示等价命令，命令日志（`L`）记录本次会话的动作和结果。`plan` 与 CLI 共用同一函数；TUI 只在计划没有未解决项时写入 `plans/`。移动文件前先自动预览，再要求输入 `apply`；执行期间 `q` 无效，Ctrl-C 需在 3 秒内连按两次。外部编辑器依次取 `$VISUAL`、`$EDITOR`、`vi`，按空白拆分参数，草案路径单独传入，不经过 shell。文件名、说明、LLM 理由和错误原文在显示前转义控制字符和双向文本控制符。
 
 ## M3：自然语言生成草案
 
@@ -161,7 +172,9 @@ cargo run -- plan --structural-only --from examples/old.tree --to examples/new.t
 | `organizer plan ... --acknowledge-review` | 明确接受生成草案的待审核项或手工修改；仍执行全部 M2 校验 |
 | `organizer apply PLAN [--root PATH] [--dry-run \| --yes]` | 默认只读预览；`--yes` 才执行，两个选项互斥 |
 | `organizer export-script PLAN --out SCRIPT` | 生成正确 shell 转义的 CLI 包装脚本；不嵌入文件操作 |
-| `organizer recover RUN_ID [--root PATH] [--finish-git]` | 默认只读检查；可重试已完成迁移的 Git 记录，绝不重放文件移动 |
+| `organizer recover RUN_ID [--root PATH] [--finish-git \| --mark-resolved]` | 默认只读检查；可重试已完成迁移的 Git 记录，或在人工核对后关闭未发布元数据的失败 run；绝不重放文件移动 |
+| `organizer archive [--root PATH] (ENTRY... \| --all)` | 把 `drafts/NAME`、`plans/NAME` 移到 `.organizer/archive/<UTC时间>-<名称>/`；不覆盖、不删除；LLM 草案与审核报告一起移动 |
+| `organizer tui [--root PATH]` | 交互式界面，见下文“TUI”；需要交互终端 |
 
 未指定根目录时，从当前目录向上查找最近的 `.organizer`。`plan` 找不到管理根时保留 M0 的独立文档比较能力。`apply` 的根由当前目录或显式 `--root` 选择，必须与计划完全一致；不会从计划路径或内容自动切换根。`--root` 与 `--structural-only` 互斥。
 
@@ -192,11 +205,18 @@ organizer recover run_UUID --root "$demo" --finish-git
 
 恢复行为：
 
-- **文件操作部分完成或崩溃**：后续 `status`/`sync`/`plan`/`apply` 报告未完成 run 并停止。`recover` 返回原计划、逐步状态、完成计数、错误、当前完整扫描和元数据发布标记，辅助人工核对；`pending` 可能代表操作已经落盘但尚未确认，绝不能盲目重试。M2 不提供文件步骤的自动续跑/回滚/清除未完成状态。
+- **文件操作部分完成或崩溃**：后续 `status`/`sync`/`plan`/`apply` 报告未完成 run 并停止。`recover` 返回原计划、逐步状态、完成计数、错误、当前完整扫描和元数据发布标记，辅助人工核对；`pending` 可能代表操作已经落盘但尚未确认，绝不能盲目重试。不提供文件步骤的自动续跑或回滚。人工把磁盘恢复到可接受的状态后，用 `recover RUN_ID --mark-resolved` 关闭该 run（状态记为 `resolved`），再归档草案和计划、`sync` 记录实际结构。它只修改操作日志，不移动文件，不修改 Tree、索引或 Git；存在 `pending.json`、状态为 `git_pending`，或索引已不是该 run 的基线时拒绝。`plan_id` 在日志中唯一，被关闭的计划永远不能再执行。
 - **文件和元数据已完成，仅 Git 失败**：报错明确区分“迁移完成”和“Git 待记录”。解决 Git 错误后使用 `recover RUN_ID --finish-git`，重新检查目标、身份和 Git 前置条件，只补齐提交及确认。包括 HEAD 已更新、索引更新失败的情况，不重复提交或移动。
 - **Tree/索引发布中断或 SQLite 恢复文件存在**：保留数据库、恢复文件及 `pending.json`，先备份元数据并人工检查；不自动删除标记或修复数据库。此时 `--finish-git` 拒绝继续。SQLite 日志本身无法安全只读打开时，恢复命令会明确报错要求人工检查。
 
-执行成功后草案和计划仍保留供审核；它们会继续触发 M1 的待处理草案提示，归档后再 `sync`。完成的日志永久保留，索引代次和日志共同防止重复执行旧计划。
+执行成功后草案和计划仍保留供审核；它们会继续触发 M1 的待处理草案提示，用 `organizer archive` 归档后再 `sync`。完成的日志永久保留，索引代次和日志共同防止重复执行旧计划。
+
+```bash
+# 人工核对失败 run 的每个步骤后
+organizer recover run_UUID --root "$demo" --mark-resolved
+organizer archive --root "$demo" --all
+organizer sync --root "$demo"
+```
 
 ## 元数据、扫描和同步边界
 
@@ -233,7 +253,7 @@ organizer recover run_UUID --root "$demo" --finish-git
 
 `sync` 会检查两次扫描是否一致，再发布元数据。以下情况都会阻止同步：手工编辑已应用基线、数据库/根目录/HEAD 不一致、人工暂存修改、额外 Git 暂存路径、不完整扫描、已有受保护子树的范围变化、旧文件被符号链接或特殊文件遮蔽、未完成更新标记。
 
-为避免静默覆盖草案，`drafts/` 或 `plans/` 有内容时也阻止同步。完成审核后，把这些文件归档到这两个目录之外再同步；建议仍保存在 `.organizer` 下，避免把归档当作新用户文件纳入扫描。未修改的 M0 `drafts/initial.tree` 不算待处理草案。`plan` 允许草案存在，但要求 `--from` 等于已记录基线且磁盘未变化。
+为避免静默覆盖草案，`drafts/` 或 `plans/` 有内容时也阻止同步。完成审核后，用 `organizer archive` 把这些文件移到 `.organizer/archive/` 再同步；归档在 `.organizer` 内，不会被当作新用户文件纳入扫描。未修改的 M0 `drafts/initial.tree` 不算待处理草案。`plan` 允许草案存在，但要求 `--from` 等于已记录基线且磁盘未变化。
 
 ## Git 隔离、失败与 M0 升级
 
@@ -335,6 +355,8 @@ src/
 │   ├── execute.rs   # 执行、最终验证、元数据发布与 Git 重试
 │   └── journal.rs   # SQLite 操作日志与恢复检查
 └── metadata.rs      # 元数据路径校验、锁、发布标记、日志
+src/workspace/       # 前端用的只读探测（probe）、待处理草案/计划列表、复制基线、archive
+src/tui/             # organizer tui；属于二进制，只用上面库的公开接口
 ```
 
 Tree 公共 API 从 `organizer::tree` 导出：`parse_tree`、`parse_normalized_tree`、`parse_tree_with_base`、`validate_tree`、`render_tree`、`relative_paths`、`diff`、`compare_trees`。`scan::scan` 返回带 `complete`、warnings、errors 的清单，`scan::identity::reconcile` 是可独立测试的纯匹配逻辑；`storage::load` 只读加载保存状态。
@@ -360,6 +382,8 @@ macOS 与 Linux 上覆盖 TreeSpec/Diff、M1 扫描与同步，以及 M2 的真�
 
 [M3 Mock 测试](../tests/llm_mock.rs) 覆盖两阶段语义分类到真实迁移的闭环、文件 ID/内容保留、有限重试、`place/keep/review`、漏分、越界和非法操作、同名冲突、只读祖先、敏感候选、内容上限、正文读取前的文件替换/符号链接、API 等待期间磁盘变化、审核标记、隐私开关以及无 API 的手工回退。Provider 单元测试覆盖 HTTP 请求编码、响应解码、截断/工具调用拒绝和密钥脱敏。
 
+TUI 测试（`src/tui/tests/`）不需要终端：测试 harness 在真实临时目录上驱动 App，同步执行后台任务，用 ratatui `TestBackend` 渲染。覆盖初始化确认、手工草案到执行再到归档的整轮流程、外部变化阻止新草案、LLM 草案编辑后需要确认审核（Mock provider）、权限错误造成的部分迁移、恢复页与 `--mark-resolved`、元数据中断与基线冲突的只读状态、控制字符转义和小终端渲染。`parity` 测试用真实 CLI 解析器解析每个 TUI 动作生成的命令行，确认参数一致。`archive` 与 `--mark-resolved` 另有 CLI 集成测试。
+
 另有一个默认忽略的 [HTTP 集成测试](../tests/llm_http.rs)，仅在允许监听 loopback 端口的环境中运行，不需要真实服务或 Key：
 
 ```bash
@@ -377,6 +401,6 @@ cargo test --locked --test llm_http -- --ignored
 - 规划采用简单的命名空间模拟，多轮依赖搜索和后代更新未做大型树优化；执行每步前后重新扫描全部受管理节点，适合 MVP，暂不针对百万级文件或长操作链优化。
 - 不删除文件/旧目录，不跨卷复制，不实现路径循环的暂存交换、自动续跑、undo 或内容备份。受保护项目、跳过项和硬链接所在的移动子树会被保守阻断。复杂目录重排可能需拆成多份审核计划。
 - M3 是有界的单次草案生成，不保留多轮对话、不做自动大树分批、PDF 提取、语义缓存或模型选择。只支持上述 Chat Completions 子集；服务不兼容时明确报错，用户可继续手工编辑。
-- 没有 GUI、监听或复杂 Agent 框架。
+- 没有 GUI、监听或复杂 Agent 框架。TUI 只在启动、按 `R` 和每次写操作后扫描；没有 TUI 内的结构编辑模式，草案用外部编辑器修改。
 
 后续建议先在实际服务上验证协议兼容性，再按需求增加显式用户授权的 PDF 标题提取、语义批处理和逐项审核。文件操作恢复、反向移动计划与跨平台能力应继续独立于 LLM 模块推进；所有新能力仍通过当前审核、身份校验和防覆盖执行器。

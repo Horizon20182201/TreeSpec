@@ -54,7 +54,7 @@ pub(crate) fn ensure_idle(directory: &Path) -> Result<()> {
         ));
     }
     let mut query = connection
-        .prepare("SELECT run_id, status FROM runs WHERE status != 'complete' ORDER BY rowid")?;
+        .prepare("SELECT run_id, status FROM runs WHERE status NOT IN ('complete', 'resolved') ORDER BY rowid")?;
     let mut rows = query.query([])?;
     if let Some(row) = rows.next()? {
         let run: String = row.get(0)?;
@@ -201,7 +201,7 @@ pub(crate) fn inspect(directory: &Path, run_id: &str) -> Result<RecoveryReport> 
         || completed_steps > steps.len()
         || !matches!(
             status.as_str(),
-            "pending" | "publishing" | "git_pending" | "failed" | "complete"
+            "pending" | "publishing" | "git_pending" | "failed" | "complete" | "resolved"
         )
         || (matches!(status.as_str(), "publishing" | "git_pending" | "complete")
             && completed_steps != steps.len())
@@ -223,7 +223,7 @@ pub(crate) fn inspect(directory: &Path, run_id: &str) -> Result<RecoveryReport> 
     Ok(RecoveryReport {
         run_id: run_id.into(), status, completed_steps, error, steps, plan,
         current_scan: scan(root)?, metadata_update_pending: metadata::exists(&directory.join("state/pending.json"))?,
-        guidance: "Read-only inspection; pending steps may already have reached disk before a crash. Compare IDs, source/target paths and the current scan; do not replay. Partial file operations require manual recovery. If all moves and metadata publication completed and only Git is pending, use recover RUN_ID --finish-git.".into(),
+        guidance: "Read-only inspection; pending steps may already have reached disk before a crash. Compare IDs, source/target paths and the current scan; do not replay. Partial file operations require manual recovery; afterwards close the run with recover RUN_ID --mark-resolved and record the actual disk state with sync. If all moves and metadata publication completed and only Git is pending, use recover RUN_ID --finish-git.".into(),
     })
 }
 
@@ -242,4 +242,110 @@ pub fn recover(root: &Path, run_id: &str, finish_git: bool) -> Result<RecoveryRe
     } else {
         Ok(report)
     }
+}
+
+/// One row of the operation journal, without the embedded plan.
+#[derive(Clone, Debug, Serialize)]
+pub struct RunSummary {
+    pub run_id: String,
+    pub plan_id: String,
+    pub status: String,
+    pub completed_steps: usize,
+    pub total_steps: usize,
+    pub error: Option<String>,
+}
+
+impl RunSummary {
+    /// `complete` and `resolved` are terminal; any other status blocks
+    /// status/sync/plan/apply until it is inspected and closed.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.status.as_str(), "complete" | "resolved")
+    }
+}
+
+pub(crate) fn summaries(directory: &Path) -> Result<Vec<RunSummary>> {
+    if !metadata::exists(&directory.join(DATABASE))? {
+        return Ok(vec![]);
+    }
+    let connection = open(directory, false)?;
+    let mut query = connection.prepare(
+        "SELECT run_id, plan_id, status, completed, error,
+           (SELECT COUNT(*) FROM steps WHERE steps.run_id = runs.run_id)
+         FROM runs ORDER BY rowid",
+    )?;
+    let rows = query.query_map([], |row| {
+        Ok(RunSummary {
+            run_id: row.get(0)?,
+            plan_id: row.get(1)?,
+            status: row.get(2)?,
+            completed_steps: row.get(3)?,
+            error: row.get(4)?,
+            total_steps: row.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+/// Read-only list of all journaled runs, oldest first.
+pub fn list_runs(root: &Path) -> Result<Vec<RunSummary>> {
+    let root = metadata::canonical_root(root)?;
+    let directory = root.join(".organizer");
+    metadata::layout_files(&directory)?;
+    let _lock = metadata::lock(&directory, false)?;
+    summaries(&directory)
+}
+
+/// Closes an interrupted run after the user recovered the files by hand.
+///
+/// This never touches managed files, the baseline, the index or Git. It only
+/// records that the run will not be continued, so that `sync` can then record
+/// the actual disk state. It refuses runs whose metadata publication started
+/// (use `--finish-git` or manual metadata recovery for those), and the plan can
+/// still never run again because plan IDs are unique in the journal.
+pub fn mark_resolved(root: &Path, run_id: &str) -> Result<RecoveryReport> {
+    let root = metadata::canonical_root(root)?;
+    let directory = root.join(".organizer");
+    metadata::layout_files(&directory)?;
+    let _lock = metadata::lock(&directory, true)?;
+    metadata::layout_files(&directory)?;
+    let report = inspect(&directory, run_id)?;
+    match report.status.as_str() {
+        "complete" | "resolved" => {
+            return Err(fail(format!(
+                "run {run_id} is already {}; nothing to resolve",
+                report.status
+            )));
+        }
+        "git_pending" => {
+            return Err(fail(
+                "files and metadata of this run are published; use recover RUN_ID --finish-git instead of --mark-resolved",
+            ));
+        }
+        _ => {}
+    }
+    if report.metadata_update_pending {
+        return Err(fail(
+            "metadata publication was interrupted (state/pending.json exists); back up .organizer and recover the metadata manually, --mark-resolved cannot repair it",
+        ));
+    }
+    let saved = crate::sync::load(&root)?;
+    if saved.generation != report.plan.base_generation
+        || super::plan::digest(&saved.tree_text) != report.plan.base_tree_digest
+    {
+        return Err(fail(
+            "the indexed baseline is no longer the run's base (metadata may be published); inspect manually or use --finish-git",
+        ));
+    }
+    let note = match &report.error {
+        Some(error) => format!("{error} [marked resolved by the user after manual recovery]"),
+        None => "[marked resolved by the user after manual recovery]".to_owned(),
+    };
+    Journal::resume_metadata(&directory, run_id)?.status("resolved", Some(&note))?;
+    metadata::log(
+        &directory,
+        &format!(
+            "recover: run {run_id} marked resolved after manual recovery; record the disk state with sync"
+        ),
+    )?;
+    inspect(&directory, run_id)
 }

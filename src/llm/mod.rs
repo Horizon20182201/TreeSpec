@@ -25,6 +25,50 @@ use std::{
 pub const MAX_PROMPT_BYTES: usize = 8192;
 const REVIEW_MARKER: &str = "# organizer-review-v1: ";
 
+/// What a `chat` call with these `--scope` IDs would offer the provider,
+/// computed from the indexed baseline without scanning or network access.
+#[derive(Clone, Debug, Serialize)]
+pub struct ScopePreview {
+    /// Context nodes including read-only ancestors (limit [`MAX_SCOPE_NODES`]).
+    pub visible_nodes: usize,
+    /// Existing files inside the editable scope; FileMapper accepts at most
+    /// [`MAX_CLASSIFY_FILES`] after the model narrows the scope.
+    pub editable_files: usize,
+    /// Protected or sensitive nodes never sent to the provider.
+    pub excluded_ids: Vec<String>,
+}
+
+pub const MAX_SCOPE_NODES: usize = context::MAX_NODES;
+pub const MAX_CLASSIFY_FILES: usize = context::MAX_FILES;
+
+/// Same scope validation as `chat` (unknown, sensitive or protected scope IDs
+/// and the node limit are errors), but read-only and offline.
+pub fn preview_scope(
+    saved: &crate::storage::SavedState,
+    scope_ids: &[String],
+) -> Result<ScopePreview> {
+    let scope = Scope::new(saved, &[], scope_ids)?;
+    let editable_files = scope
+        .nodes
+        .iter()
+        .filter(|node| node.editable && node.kind == NodeKind::File)
+        .count();
+    let mut excluded_ids: Vec<_> = scope.excluded.into_iter().collect();
+    excluded_ids.sort();
+    Ok(ScopePreview {
+        visible_nodes: scope.nodes.len(),
+        editable_files,
+        excluded_ids,
+    })
+}
+
+/// IDs of nodes `chat` never offers to the provider or accepts as `--scope`.
+pub fn excluded_ids(saved: &crate::storage::SavedState) -> Vec<String> {
+    let mut ids: Vec<_> = context::excluded_ids(saved).into_iter().collect();
+    ids.sort();
+    ids
+}
+
 pub fn has_review_marker(source: &str) -> bool {
     source.lines().any(|line| line.starts_with(REVIEW_MARKER))
 }
@@ -79,7 +123,7 @@ pub fn chat_with_provider(
         ));
     }
     let (lock, saved, snapshot) = validate::context(root, false)?;
-    let mut scope = Scope::new(&saved, &snapshot, &options.scope_ids)?;
+    let mut scope = Scope::new(&saved, &snapshot.warnings, &options.scope_ids)?;
     let review_id = uuid::Uuid::new_v4().to_string();
     let (draft_path, review_path) = output_paths(&saved.root, out, &review_id)?;
     drop(lock); // Never hold Organizer's metadata lock across HTTP calls.

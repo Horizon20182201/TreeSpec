@@ -32,6 +32,21 @@ pub fn apply_plan(plan: &MigrationPlan, root: &Path) -> Result<ExecutionReport> 
     apply_with_hook(plan, root, |_| Ok(()))
 }
 
+/// [`apply_plan`] that reports `(completed, total)` after each journaled step.
+/// The callback is for display only and cannot stop the migration: stopping
+/// between steps would leave a partial run that cannot be resumed.
+pub fn apply_plan_with_progress(
+    plan: &MigrationPlan,
+    root: &Path,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<ExecutionReport> {
+    let total = plan.operations.len();
+    apply_with_hook(plan, root, |completed| {
+        progress(completed, total);
+        Ok(())
+    })
+}
+
 fn apply_with_hook(
     plan: &MigrationPlan,
     root: &Path,
@@ -242,6 +257,11 @@ pub(crate) fn finish_recovered_git(directory: &Path, report: &RecoveryReport) ->
     if report.status == "complete" {
         return Ok(());
     }
+    if report.status == "resolved" {
+        return Err(fail(
+            "run was marked resolved after manual recovery; record the disk state with sync instead",
+        ));
+    }
     if report.metadata_update_pending || report.completed_steps != report.plan.operations.len() {
         return Err(fail(
             "partial migration/publication requires manual recovery; --finish-git never replays file operations",
@@ -372,5 +392,51 @@ mod tests {
         assert!(apply_plan(&plan, root).is_err());
         assert!(crate::migration::journal::recover(root, &run_id, true).is_err());
         assert_eq!(fs::read(root.join("renamed")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn manually_recovered_run_can_be_closed_but_never_replayed() {
+        use crate::migration::journal::{list_runs, mark_resolved};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::write(root.join("file"), "unchanged").unwrap();
+        sync::init(root).unwrap();
+        let old = storage::load(&root.join(".organizer/state/index.sqlite"))
+            .unwrap()
+            .tree;
+        let mut target = old.clone();
+        target.nodes[0].parent_id = Some("directory".into());
+        target.nodes.push(TreeNode {
+            id: "directory".into(),
+            parent_id: None,
+            name: "new".into(),
+            kind: NodeKind::Directory,
+            description: None,
+        });
+        let plan = crate::migration::plan(root, &old, &target).unwrap();
+        apply_with_hook(&plan, root, |_| Err(fail("injected interruption"))).unwrap_err();
+        let runs = list_runs(root).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].is_finished());
+        assert_eq!((runs[0].completed_steps, runs[0].total_steps), (1, 2));
+        let run_id = runs[0].run_id.clone();
+        // Metadata publication must not be in progress.
+        let marker = root.join(".organizer/state/pending.json");
+        fs::write(&marker, "{}").unwrap();
+        assert!(mark_resolved(root, &run_id).is_err());
+        fs::remove_file(&marker).unwrap();
+        let report = mark_resolved(root, &run_id).unwrap();
+        assert_eq!(report.status, "resolved");
+        assert!(report.error.unwrap().contains("marked resolved"));
+        assert!(mark_resolved(root, &run_id).is_err());
+        assert!(crate::migration::journal::recover(root, &run_id, true).is_err());
+        // The run no longer blocks; sync records the half-applied disk state.
+        let status = sync::status(root).unwrap();
+        assert_eq!(status.added.len(), 1);
+        sync::sync(root, false).unwrap();
+        assert_eq!(fs::read(root.join("file")).unwrap(), b"unchanged");
+        // The resolved plan is stale and its ID can never start a second run.
+        assert!(apply_plan(&plan, root).is_err());
+        assert_eq!(list_runs(root).unwrap().len(), 1);
     }
 }

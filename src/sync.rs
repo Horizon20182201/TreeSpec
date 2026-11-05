@@ -69,20 +69,53 @@ pub(crate) fn baseline_conflicts(metadata: &Path, saved: &SavedState) -> Result<
 }
 
 pub fn status(root: &Path) -> Result<ReconcileReport> {
+    let (directory, _lock, _saved, mut report) = status_parts(root)?;
+    report
+        .conflicts
+        .extend(metadata::draft_conflicts(&directory)?);
+    Ok(report)
+}
+
+/// `status` for interactive front ends: pending drafts/plans are returned as
+/// structured entries instead of being merged into `conflicts`, and the indexed
+/// baseline is included so callers do not need a second, unlocked load.
+#[derive(Debug)]
+pub struct DetailedStatus {
+    /// Baseline, Git and scan conflicts only; no pending draft/plan messages.
+    pub report: ReconcileReport,
+    /// The subset of `report.conflicts` caused by the baseline or Git
+    /// (manual `structure.tree` edits, staged changes, foreign HEAD).
+    pub baseline_conflicts: Vec<String>,
+    pub pending: Vec<crate::workspace::Artifact>,
+    pub saved: SavedState,
+}
+
+pub fn status_detailed(root: &Path) -> Result<DetailedStatus> {
+    let (directory, _lock, saved, report) = status_parts(root)?;
+    let baseline_conflicts = baseline_conflicts(&directory, &saved)?;
+    let pending = crate::workspace::artifacts(&directory)?;
+    Ok(DetailedStatus {
+        report,
+        baseline_conflicts,
+        pending,
+        saved,
+    })
+}
+
+fn status_parts(
+    root: &Path,
+) -> Result<(PathBuf, metadata::MetadataLock, SavedState, ReconcileReport)> {
     let root = metadata::canonical_root(root)?;
     let directory = root.join(".organizer");
     metadata::layout(&directory)?;
-    let _lock = metadata::lock(&directory, false)?;
+    let lock = metadata::lock(&directory, false)?;
     metadata::layout(&directory)?;
     let saved = load(&root)?;
     let mut report = reconcile(&scan(&root)?, &saved)?;
     report
         .conflicts
         .extend(baseline_conflicts(&directory, &saved)?);
-    report
-        .conflicts
-        .extend(metadata::draft_conflicts(&directory)?);
-    Ok(report)
+    Ok((directory, lock, saved, report))
 }
 
 pub fn init(root: &Path) -> Result<SyncReport> {

@@ -5,7 +5,7 @@ pub mod journal;
 pub mod plan;
 pub mod validate;
 
-pub use execute::{ExecutionReport, apply_plan};
+pub use execute::{ExecutionReport, apply_plan, apply_plan_with_progress};
 pub use plan::{MigrationPlan, Operation, PlanningContext, build_plan};
 pub use validate::{ValidationReport, validate_plan};
 

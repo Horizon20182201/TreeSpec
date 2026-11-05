@@ -577,6 +577,9 @@ fn git_failure_retries_metadata_only_without_duplicate_moves_or_commits() {
             .unwrap();
         drop(db);
         assert!(!run(root, &["apply", PLAN, "--yes"]).status.success());
+        // Published runs are finished with --finish-git, never closed by hand.
+        let refused = run(root, &["recover", &run_id, "--mark-resolved"]);
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("--finish-git"));
         fs::remove_file(lock).unwrap();
         let report: Value =
             serde_json::from_slice(&success(root, &["recover", &run_id, "--finish-git"]).stdout)
@@ -590,6 +593,79 @@ fn git_failure_retries_metadata_only_without_duplicate_moves_or_commits() {
             b"private bytes\0\xff\n"
         );
     }
+}
+
+#[test]
+fn manually_resolved_run_is_closed_archived_and_synced_from_the_cli() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = fixture(&["file"]);
+    let root = temp.path();
+    fs::create_dir(root.join("locked")).unwrap();
+    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(root.join("locked/probe"), "").is_ok() {
+        return; // Running as root: permissions cannot inject the failure.
+    }
+    success(root, &["sync"]);
+    let mut target = tree(root);
+    let file = id(&target, "file");
+    let locked = id(&target, "locked");
+    add_directory(&mut target, "made", "made", None);
+    add_directory(&mut target, "sub", "sub", Some(locked));
+    node(&mut target, &file).parent_id = Some("made".into());
+    write_plan(root, &target);
+    let failed = run(root, &["apply", PLAN, "--yes"]);
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("stopped after 1/3"));
+    let db = rusqlite::Connection::open(root.join(".organizer/state/operations.sqlite")).unwrap();
+    let run_id: String = db
+        .query_row("SELECT run_id FROM runs", [], |row| row.get(0))
+        .unwrap();
+    drop(db);
+    assert!(
+        !run(
+            root,
+            &["recover", &run_id, "--finish-git", "--mark-resolved"]
+        )
+        .status
+        .success()
+    );
+    let report: Value =
+        serde_json::from_slice(&success(root, &["recover", &run_id, "--mark-resolved"]).stdout)
+            .unwrap();
+    assert_eq!(report["status"], "resolved");
+    assert!(
+        !run(root, &["sync"]).status.success(),
+        "the draft and plan are still pending"
+    );
+    assert!(
+        !run(root, &["archive"]).status.success(),
+        "archive needs entries or --all"
+    );
+    let archived: Value =
+        serde_json::from_slice(&success(root, &["archive", "--all"]).stdout).unwrap();
+    assert_eq!(
+        archived["moved"],
+        serde_json::json!(["drafts/new.tree", "plans/migration.json"])
+    );
+    success(root, &["sync"]);
+    assert!(
+        relative_paths(&tree(root))
+            .unwrap()
+            .values()
+            .any(|p| p == "made")
+    );
+    assert_eq!(
+        fs::read(root.join("file")).unwrap(),
+        b"private bytes\0\xff\n"
+    );
+    // The archived plan can never start a second run.
+    let archived_plan =
+        Path::new(archived["archive"].as_str().unwrap()).join("plans/migration.json");
+    assert!(
+        !run(root, &["apply", archived_plan.to_str().unwrap(), "--yes"])
+            .status
+            .success()
+    );
+    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 #[test]

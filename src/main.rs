@@ -17,6 +17,11 @@ use organizer::tree::{
     compare_trees, parse_normalized_tree, parse_tree, parse_tree_with_base, render_tree,
 };
 
+// The TUI belongs to the binary, not the library: it can only reach the
+// library's public API, the same surface the CLI commands use.
+#[cfg(feature = "tui")]
+mod tui;
+
 #[derive(Parser)]
 #[command(
     name = "organizer",
@@ -124,8 +129,29 @@ enum Command {
         #[arg(long)]
         root: Option<PathBuf>,
         /// Retry only the Git recording of an already published migration.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "mark_resolved")]
         finish_git: bool,
+        /// After recovering files by hand, close a run whose metadata was never
+        /// published; then record the actual disk state with sync.
+        #[arg(long)]
+        mark_resolved: bool,
+    },
+    /// Move pending drafts/plans into .organizer/archive so sync can continue.
+    Archive {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// drafts/NAME or plans/NAME entries; a draft keeps its review report.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        entries: Vec<String>,
+        /// Archive every pending drafts/ and plans/ entry.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Interactive terminal interface over these commands.
+    #[cfg(feature = "tui")]
+    Tui {
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
 }
 
@@ -221,7 +247,6 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             structural_only,
             acknowledge_review,
         } => {
-            let old = parse_normalized_tree(&read_tree(&from)?)?;
             let managed_root = if structural_only {
                 None
             } else if let Some(root) = root {
@@ -229,30 +254,19 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             } else {
                 management::discover_root()?
             };
-            let source = read_tree(&to)?;
-            let new = parse_tree_with_base(&source, &old)?;
-            llm::check_review(
-                managed_root.as_deref(),
-                &to,
-                &source,
-                &old,
-                &new,
-                acknowledge_review,
-            )?;
-            if let Some(root) = managed_root {
-                let plan = migration::plan(&root, &old, &new)?;
-                output(
-                    &(serde_json::to_string_pretty(&plan)? + "\n"),
-                    out.as_deref(),
-                )?;
-                return Ok(if plan.unresolved.is_empty() { 0 } else { 2 });
-            }
-            let report = compare_trees(&old, &new)?;
-            output(
-                &(serde_json::to_string_pretty(&report)? + "\n"),
-                out.as_deref(),
-            )?;
-            return Ok(if report.unresolved.is_empty() { 0 } else { 2 });
+            let (text, unresolved) =
+                match plan_documents(managed_root.as_deref(), &from, &to, acknowledge_review)? {
+                    PlanOutcome::Migration(plan) => (
+                        serde_json::to_string_pretty(&plan)?,
+                        !plan.unresolved.is_empty(),
+                    ),
+                    PlanOutcome::Diff(report) => (
+                        serde_json::to_string_pretty(&report)?,
+                        !report.unresolved.is_empty(),
+                    ),
+                };
+            output(&(text + "\n"), out.as_deref())?;
+            return Ok(if unresolved { 2 } else { 0 });
         }
         Command::Apply {
             plan,
@@ -280,16 +294,50 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             run_id,
             root,
             finish_git,
+            mark_resolved,
         } => {
-            let report = migration::journal::recover(
-                &management::resolve_root(root.as_deref())?,
-                &run_id,
-                finish_git,
-            )?;
+            let root = management::resolve_root(root.as_deref())?;
+            let report = if mark_resolved {
+                migration::journal::mark_resolved(&root, &run_id)?
+            } else {
+                migration::journal::recover(&root, &run_id, finish_git)?
+            };
             output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
         }
+        Command::Archive { root, entries, all } => {
+            let root = management::resolve_root(root.as_deref())?;
+            let entries = if all { vec![] } else { entries };
+            let report = organizer::workspace::archive(&root, &entries)?;
+            output(&(serde_json::to_string_pretty(&report)? + "\n"), None)?;
+        }
+        #[cfg(feature = "tui")]
+        Command::Tui { root } => return tui::run(root),
     }
     Ok(0)
+}
+
+pub(crate) enum PlanOutcome {
+    Migration(Box<MigrationPlan>),
+    Diff(organizer::tree::DiffReport),
+}
+
+/// The complete `plan` logic, shared by the CLI and the TUI so both apply the
+/// same LLM review gate and planner. `root` is `None` only for a document-only
+/// comparison outside a managed root.
+pub(crate) fn plan_documents(
+    root: Option<&Path>,
+    from: &Path,
+    to: &Path,
+    acknowledge_review: bool,
+) -> Result<PlanOutcome, Box<dyn Error>> {
+    let old = parse_normalized_tree(&read_tree(from)?)?;
+    let source = read_tree(to)?;
+    let new = parse_tree_with_base(&source, &old)?;
+    llm::check_review(root, to, &source, &old, &new, acknowledge_review)?;
+    Ok(match root {
+        Some(root) => PlanOutcome::Migration(Box::new(migration::plan(root, &old, &new)?)),
+        None => PlanOutcome::Diff(compare_trees(&old, &new)?),
+    })
 }
 
 fn read_prompt() -> io::Result<String> {

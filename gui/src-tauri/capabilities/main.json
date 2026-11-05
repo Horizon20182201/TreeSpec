@@ -1,0 +1,31 @@
+{
+  "identifier": "main",
+  "description": "The only capability: TreeSpec Organizer's own commands, event listening and window dragging. No plugin APIs are exposed to the WebView (GUI design §8.2).",
+  "windows": ["welcome", "ws-*"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-window-info",
+    "allow-pick-folder",
+    "allow-open-recent",
+    "allow-open-parent",
+    "allow-snapshot",
+    "allow-refresh",
+    "allow-round-detail",
+    "allow-preview-scope",
+    "allow-draft-text",
+    "allow-check-draft",
+    "allow-save-draft",
+    "allow-run",
+    "allow-command",
+    "allow-reveal",
+    "allow-settings",
+    "allow-set-settings",
+    "allow-set-api-key",
+    "allow-system",
+    "allow-set-guard",
+    "allow-force-close"
+  ]
+}

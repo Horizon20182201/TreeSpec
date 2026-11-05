@@ -139,3 +139,58 @@ fn archive_moves_pairs_without_overwriting_and_unblocks_sync() {
     let synced = crate::sync::sync(root, false).unwrap();
     assert!(!synced.structure_changed && synced.report.added.is_empty());
 }
+
+#[test]
+fn save_draft_keeps_text_and_refuses_stale_or_marker_edits() {
+    let temp = managed();
+    let draft = copy_baseline_draft(temp.path(), "edit.tree").unwrap();
+    let loaded = read_draft(temp.path(), "edit.tree").unwrap();
+    assert_eq!(loaded.text, fs::read_to_string(&draft).unwrap());
+
+    // Saved verbatim: blank lines and comments survive, no normalization.
+    let edited = format!("# keep me\n\n{}", loaded.text);
+    let digest = save_draft(temp.path(), "edit.tree", &loaded.digest, &edited).unwrap();
+    assert_eq!(fs::read_to_string(&draft).unwrap(), edited);
+    assert_ne!(digest, loaded.digest);
+
+    // A stale digest (the old one) is refused and nothing is written.
+    let error = save_draft(temp.path(), "edit.tree", &loaded.digest, "x").unwrap_err();
+    assert!(error.to_string().contains("changed on disk"), "{error}");
+    assert_eq!(fs::read_to_string(&draft).unwrap(), edited);
+
+    // A manual draft cannot gain a review marker.
+    let marked = format!("# organizer-review-v1: fake\n{edited}");
+    let error = save_draft(temp.path(), "edit.tree", &digest, &marked).unwrap_err();
+    assert!(error.to_string().contains("review marker"), "{error}");
+
+    // A generated draft cannot lose or change its marker.
+    let generated = temp.path().join(".organizer/drafts/gen.tree");
+    fs::write(&generated, format!("# organizer-review-v1: abc\n{edited}")).unwrap();
+    let loaded_gen = read_draft(temp.path(), "gen.tree").unwrap();
+    let error = save_draft(temp.path(), "gen.tree", &loaded_gen.digest, &edited).unwrap_err();
+    assert!(error.to_string().contains("review marker"), "{error}");
+    let kept = format!("{}\n# note\n", loaded_gen.text);
+    save_draft(temp.path(), "gen.tree", &loaded_gen.digest, &kept).unwrap();
+}
+
+#[test]
+fn save_draft_rejects_bad_names_missing_files_and_symlinks() {
+    let temp = managed();
+    for name in [
+        "../structure.tree",
+        "x.review.json",
+        ".hidden.tree",
+        "a/b.tree",
+        "plan.json",
+    ] {
+        assert!(
+            save_draft(temp.path(), name, "sha256:0", "").is_err(),
+            "{name}"
+        );
+    }
+    assert!(read_draft(temp.path(), "missing.tree").is_err());
+    let link = temp.path().join(".organizer/drafts/link.tree");
+    std::os::unix::fs::symlink(temp.path().join(".organizer/structure.tree"), &link).unwrap();
+    assert!(read_draft(temp.path(), "link.tree").is_err());
+    assert!(save_draft(temp.path(), "link.tree", "sha256:0", "x").is_err());
+}

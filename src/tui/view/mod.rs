@@ -10,7 +10,6 @@ mod work_detail;
 
 use super::{
     app::{App, Page, View},
-    rounds,
     state::Workspace,
     text,
 };
@@ -173,27 +172,37 @@ fn status_line(app: &App) -> Line<'static> {
 
 /// The bottom-bar suggestion computed from the state model.
 pub fn next_step(app: &App) -> String {
-    let pending = app.snap().is_some_and(|s| s.has_pending());
-    match &app.state {
-        Workspace::Failed(_) => "无法读取状态：查看概览页的错误，修正后按 R 重新扫描".into(),
-        Workspace::Uninitialized => "按 i 初始化这个目录".into(),
-        Workspace::Interrupted => "元数据更新曾中断：先备份 .organizer，再人工检查".into(),
-        Workspace::Unfinished => "迁移未完成：在恢复页（5）检查".into(),
-        Workspace::Conflict => {
+    use organizer::frontend::next::{NextStep as N, next_step};
+    let name = |round: &str| text::middle(&text::clean(round), 24);
+    match next_step(&app.state, app.snap()) {
+        N::Failed => "无法读取状态：查看概览页的错误，修正后按 R 重新扫描".into(),
+        N::Init => "按 i 初始化这个目录".into(),
+        N::Inspect => "元数据更新曾中断：先备份 .organizer，再人工检查".into(),
+        N::Recover => "迁移未完成：在恢复页（5）检查".into(),
+        N::SaveBaseline => {
             "基线冲突：可在整理页按 n 另存当前 structure.tree，再人工恢复基线".into()
         }
-        Workspace::ScanIncomplete => "扫描不完整：修正出错路径的权限后按 R".into(),
-        Workspace::GitPending if pending => {
-            "Git 待补记：先在整理页按 Z 归档，再在概览页按 s 重试".into()
+        N::Rescan => "扫描不完整：修正出错路径的权限后按 R".into(),
+        N::RetryGit {
+            archive_first: true,
+        } => "Git 待补记：先在整理页按 Z 归档，再在概览页按 s 重试".into(),
+        N::RetryGit { .. } => "Git 待补记：在概览页按 s 重试".into(),
+        N::Sync {
+            archive_first: true,
+        } => "磁盘有变化：先在整理页按 Z 归档进行中的轮次，再在概览页按 s 同步".into(),
+        N::Sync { .. } => "磁盘有变化：在概览页按 s 同步".into(),
+        N::Apply { round } => format!("{}：计划可执行。在整理页按 d 预览，A 执行", name(&round)),
+        N::AcknowledgeAndPlan { round } => {
+            format!(
+                "{}：先在审核视图检查，再按 p 确认审核并生成计划",
+                name(&round)
+            )
         }
-        Workspace::GitPending => "Git 待补记：在概览页按 s 重试".into(),
-        Workspace::Changed if pending => {
-            "磁盘有变化：先在整理页按 Z 归档进行中的轮次，再在概览页按 s 同步".into()
-        }
-        Workspace::Changed => "磁盘有变化：在概览页按 s 同步".into(),
-        Workspace::Clean => app
-            .snap()
-            .map_or_else(String::new, |s| rounds::suggestion(&s.rounds)),
+        N::Plan { round } => format!("{}：检查目标结构后按 p 生成计划", name(&round)),
+        N::Fix { round, stage } => format!("{}：{stage}，按 e 编辑草案或 z 归档", name(&round)),
+        N::Archive { round, stage } => format!("{}：{stage}，按 z 归档本轮", name(&round)),
+        N::ArchiveAll => "有未关联的计划或孤立文件，按 Z 全部归档".into(),
+        N::NewDraft => "整理页按 n 新建草案（LLM 或复制当前结构）".into(),
     }
 }
 

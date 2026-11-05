@@ -14,7 +14,7 @@ use crate::{
     tree::{NodeKind, TreeSpec, render_tree},
 };
 use context::Scope;
-use provider::{LlmProvider, env_flag};
+use provider::{LlmPolicy, LlmProvider};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -73,12 +73,22 @@ pub fn has_review_marker(source: &str) -> bool {
     source.lines().any(|line| line.starts_with(REVIEW_MARKER))
 }
 
+/// The review-marker lines of a draft, in order.
+pub(crate) fn review_marker_lines(source: &str) -> Vec<&str> {
+    source
+        .lines()
+        .filter(|line| line.starts_with(REVIEW_MARKER))
+        .collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ChatOptions {
     pub prompt: String,
     pub scope_ids: Vec<String>,
     pub classify: bool,
     pub read_content: bool,
+    /// Front-end restrictions, combined with the environment switches.
+    pub policy: LlmPolicy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,11 +121,14 @@ pub fn chat_with_provider(
     options: &ChatOptions,
     out: Option<&Path>,
 ) -> Result<ChatReport> {
-    if env_flag("ORGANIZER_LLM_DISABLED")? {
+    let policy = options.policy.effective()?;
+    if policy.disabled {
         return Err(fail("LLM is disabled; use manual Tree drafts"));
     }
-    if options.read_content && env_flag("ORGANIZER_LLM_NO_CONTENT")? {
-        return Err(fail("ORGANIZER_LLM_NO_CONTENT=1 prohibits --read-content"));
+    if options.read_content && policy.no_content {
+        return Err(fail(
+            "ORGANIZER_LLM_NO_CONTENT=1 or the no-content setting prohibits --read-content",
+        ));
     }
     if options.prompt.trim().is_empty() || options.prompt.len() > MAX_PROMPT_BYTES {
         return Err(fail(

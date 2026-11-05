@@ -1,6 +1,6 @@
 # TreeSpec Organizer macOS GUI 设计
 
-> 状态：设计草案，尚未实现。第 15 节列出需要确认的决定。界面示例见 [GUI_MOCKUP.html](GUI_MOCKUP.html)（单文件，用浏览器直接打开）。
+> 状态：第一期已实现（`gui/`），第 15 节的决定全部按推荐选项确认（2026-11-06）。实现与本文的差异和尚未在真实 macOS 上验证的部分见第 17 节；构建与开发见 [gui/README.md](../gui/README.md)。最初的界面示例见 [GUI_MOCKUP.html](GUI_MOCKUP.html)。
 
 ## 1. 目标与边界
 
@@ -56,7 +56,7 @@ GUI 另加三条：
 | Svelte | 5.x（runes） | 截至 2026 年 10 月为 5.57。不用 SvelteKit，单页应用用 Vite 构建 |
 | CodeMirror | 6 | 只引入 `@codemirror/state`、`view`、`commands`、`language`；TreeSpec 高亮自己写一个小的 `StreamLanguage` |
 | Rust 侧新增依赖 | `tauri`、`tauri-build`、`ts-rs`、`security-framework` | `ts-rs` 从 DTO 生成 TypeScript 类型；`security-framework` 读写钥匙串 |
-| Tauri 插件 | 只用 `dialog`、`opener`、`window-state` | 全部只在 Rust 侧调用，不给前端开放对应权限。不用 `fs`、`shell`、`http`、`store`、`updater`（第一期） |
+| Tauri 插件 | 只用 `dialog` | 只在 Rust 侧调用，不给前端开放权限。“在 Finder 中显示”直接运行 `/usr/bin/open -R`，窗口大小记在设置文件中，所以不需要 `opener` 和 `window-state`（第 17 节）。不用 `fs`、`shell`、`http`、`store`、`updater` |
 | macOS | 13 或更新（待确认，见第 15 节） | Tauri 2 本身支持 10.15+，库要求 10.12+；设为 13 是为了 WebKit 版本较新，也减少测试组合 |
 
 ## 3. 架构
@@ -130,7 +130,7 @@ TUI 第一期的 `state.rs`、`rounds.rs`、`review.rs`、`load.rs`、`action.rs
 | `draft_text(name)` | 读取草案原文及其 SHA-256 | `workspace::read_draft`（新） |
 | `check_draft(name, text)` | 对未保存的文本做与载入时相同的解析和审核检查，不写盘 | `frontend::check_draft`（新） |
 | `run(action)` | 执行一个写动作或预览 | `Job::Run(Action)` |
-| `reveal(target)` | 在 Finder 中显示节点、草案或计划 | `opener::reveal_item_in_dir` |
+| `reveal(target)` | 在 Finder 中显示节点、草案、计划或恢复步骤的路径 | `/usr/bin/open -R` |
 | `get_settings()`、`set_settings(s)`、`set_api_key(k)` | 设置；API Key 只能写入或清除，不能读出 | 无 |
 
 `run` 的参数是带标签的枚举，与 `Action` 一一对应，但所有路径都换成名称：`Plan { round, acknowledge_review, out_name }`、`Apply { plan, token }`、`Archive { selectors }` 等。后端用 `workspace::check_new_name` 和已加载快照中的轮次表把名称解析为 `.organizer` 内的路径，再构造 `Action`。前端传来的名称不在快照里时直接拒绝。
@@ -390,7 +390,7 @@ LLM 未配置或已禁用时，“新建 LLM 草案”置灰，并说明原因�
 
 ### 8.3 执行期间
 
-- 窗口关闭（`⌘W`、红色按钮）、`⌘Q`、注销和关机在执行期间被拦截，显示警告工作表：“迁移正在进行。现在退出会留下部分完成的迁移，需要人工恢复。”默认按钮是“继续等待”，“仍然退出”标为破坏性。这对应 TUI 的“Ctrl-C 需在 3 秒内连按两次”。`⌘Q` 使用自定义菜单项，走与窗口关闭相同的拦截逻辑。
+- 窗口关闭（`⌘W`、红色按钮）、`⌘Q`、注销和关机在执行期间被拦截，显示警告工作表：“迁移正在进行。现在退出会留下部分完成的迁移，需要人工恢复。”默认按钮是“继续等待”，“仍然退出”标为破坏性；单独关闭窗口不提供“仍然关闭”，因为关闭不会停止迁移。这对应 TUI 的“Ctrl-C 需在 3 秒内连按两次”。`⌘Q` 使用自定义菜单项，走与窗口关闭相同的拦截逻辑。
 - 执行期间阻止系统空闲睡眠。实现上以子进程运行 `/usr/bin/caffeinate -i -w <本进程 PID>`，执行结束后结束该子进程。合盖睡眠无法阻止，唤醒后执行会继续。
 - 强制退出和断电无法拦截，依靠操作日志：下次打开时进入恢复页。
 - 等待 LLM 时可以退出，提示“将放弃这次草案生成”。库总是先写报告再写草案，最坏情况只留下孤立报告。
@@ -426,7 +426,7 @@ GUI 在打开工作区前检查 `xcode-select -p` 是否成功。失败时不调
 
 ### 9.4 Finder 与系统集成
 
-- **在 Finder 中显示**：结构树节点、概览的变化项、轮次文件、恢复步骤的源和目标。Rust 侧用基线中的相对路径拼接，确认结果仍在根目录内，再调用 `opener` 插件的 `reveal_item_in_dir`。
+- **在 Finder 中显示**：结构树节点、概览的变化项、轮次文件、恢复步骤的源和目标。Rust 侧用基线中的相对路径拼接，确认结果仍在根目录内，再以单独参数运行 `/usr/bin/open -R 路径`。
 - **拖放与“打开方式”**：窗口和 Dock 图标接受文件夹拖放。`Info.plist` 用 `CFBundleDocumentTypes` 声明 `public.folder`，`LSHandlerRank` 设为 `Alternate`，不抢占 Finder 对文件夹的默认处理。
 - **最近打开**：第一期只保存在设置文件中，显示在欢迎窗口和“文件 › 最近打开”。接入系统的最近项目列表和 Dock 菜单需要调用 AppKit，放在第二期。
 - **第二期**：Quick Look 预览（空格键）、后台任务完成时发送系统通知、有未完成迁移时 Dock 图标显示标记。
@@ -599,3 +599,25 @@ npm run tauri build -- --target universal-apple-darwin
 - [Tauri Prerequisites](https://tauri.app/start/prerequisites/)：macOS 10.15 及以上。
 - [What's new in Svelte: September 2026](https://svelte.dev/blog/whats-new-in-svelte-september-2026)：Svelte 5.57。
 - [Apple Developer Forums：Reset access obtained through infe…](https://developer.apple.com/forums/thread/124121)、[Michael Tsai：Privacy & Security Settings Don’t Show Intent-Based Access](https://mjtsai.com/blog/2026/04/10/privacy-t-show-intent-based-access/)：通过“打开”面板获得的文件夹授权会持续有效，且不显示在系统设置中。
+
+## 17. 实现记录（第一期，2026-11-06）
+
+### 17.1 与上文的差异
+
+- **GUI crate 分成两层。** `gui/src-tauri` 的库 `organizer_gui`（`src/*.rs`）是与 Tauri 无关的核心：会话、命令白名单、视图模型、设置、钥匙串、执行令牌。可执行文件 `treespec-organizer`（`src/app/`，feature `app`）只负责窗口、菜单、IPC 和生命周期。这样核心可以在任何平台上用 `cargo test --no-default-features` 测试，第 12 节的 `commands.rs`、`dto.rs`、`settings.rs` 等都在核心里，`macos.rs` 改名为 `system.rs`。
+- **新增 IPC 命令。** 除 3.4 的命令外：`window_info`（欢迎窗口还是工作区窗口）、`open_recent`/`open_parent`（前端只传最近列表的序号，不传路径）、`command`（确认工作表的等价命令由 Rust 的 `Action::command` 生成，前端不拼接）、`set_guard`（编辑器报告未保存修改，供关闭和退出拦截）、`force_close`、`system`（安装命令行工具、打开“文件与文件夹”设置、重新授权、选择外部编辑器等）。全部列在 `build.rs` 的 `AppManifest` 和 `capabilities/main.json` 中。
+- **事件按窗口投递。** 后端用 `emit_to(窗口标签, …)` 发送 `gui`、`menu`、`guard`、`activated`、`welcome` 事件，前端用当前窗口的 `listen` 接收，事件不会串到别的窗口。
+- **插件只用 `dialog`。** 见 2.3。窗口大小和检查器开关按根目录保存在 `settings.json`。
+- **“另存为新草案”。** 文件在外部被修改时，编辑器提供“重新载入”和“拷贝我的文本”。库只能从基线新建草案，不能用任意文本新建，所以没有直接的“另存为”。
+- **前端测试的后端替身。** Playwright 没有使用 `@tauri-apps/api/mocks`，而是用 `vite build --mode mock` 构建出带内存后端的页面（`gui/src/mock/`），它和 Tauri 命令同名、同类型。生产构建不包含它（构建后检查）。
+- **执行期间的关闭与设置。** 迁移进行中只允许“仍然退出”（之后由操作日志进入恢复），不允许单独关闭窗口：关闭不会停止迁移，只会让它失去退出拦截。外部编辑器只能通过系统“选择应用”面板设置，WebView 不能指定要启动的程序；已保存 API Key 时更改服务地址，需要在原生对话框中确认，WebView 无法代替用户点击。执行前除了令牌，还要确认计划文件中的 `plan_id` 仍是预览时那一份。
+- **共享前端层的补充。** worker 线程捕获任务中的 panic 并仍然发出“完成”事件，前端不会一直显示忙碌。`organizer::frontend` 另有 `recovery`（恢复页“当前磁盘”提示，原在 TUI 视图中）和 `check`（未保存草案检查）。`frontend::text::hint` 的中文提示不再提 TUI 键位，两个前端通用。`main.rs` 的输出辅助函数移到库里的 `organizer::output`。
+
+### 17.2 验证情况
+
+已验证（Linux 开发环境）：根目录门禁（fmt、两种 feature 组合的 clippy、137 个测试）；`gui/src-tauri` 核心 24 个测试（在真实临时目录上走完“初始化 → 复制基线 → 编辑保存 → 计划 → 预览 → 执行 → 归档”，以及令牌失效与过期、预览后计划文件被替换、白名单拒绝路径和名称、关闭窗口后会话被释放）；整个 Tauri 应用对 `aarch64-apple-darwin` 的交叉 clippy（含 `tauri-build` 对命令、capability、配置和 Info.plist 的检查，但不链接）；前端 svelte-check、ESLint（含 `svelte/no-at-html-tags`）、Vitest 5 个测试（工作表键盘规则、不可信文本只按文本渲染）、Playwright 4 个流程。
+
+另做了一次独立的安全审查（白名单、路径、令牌、锁顺序、设置），上面“执行期间的关闭与设置”和会话释放、任务队列顺序、草案读取时的符号链接替换都是据此修正的。
+
+尚未验证，需要在 Mac 上完成：应用实际启动与运行（WKWebView 渲染、CSP、菜单、红绿灯位置、拖放、Dock 打开文件夹）、钥匙串读写、`caffeinate`、退出与注销拦截、TCC 授权提示与重新授权、签名与公证，以及 13.1 的全部手工检查。
+

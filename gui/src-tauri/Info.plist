@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>用于扫描和整理你选择的文件夹的结构；默认只读取文件名和元数据，不读取文件内容。</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>用于扫描和整理你选择的文件夹的结构；默认只读取文件名和元数据，不读取文件内容。</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>用于扫描和整理你选择的文件夹的结构；默认只读取文件名和元数据，不读取文件内容。</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>用于扫描和整理你选择的外置卷上的文件夹结构；默认只读取文件名和元数据。</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>用于扫描和整理你选择的网络卷上的文件夹结构；默认只读取文件名和元数据。</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Folder</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.folder</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>

@@ -68,7 +68,56 @@ fn optional_env(name: &str) -> Result<Option<String>> {
     }
 }
 
+/// Restrictions a front end applies on top of the `ORGANIZER_LLM_*`
+/// environment switches. Each one is in effect if either the policy or the
+/// environment sets it, so a front-end setting can only add restrictions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LlmPolicy {
+    pub disabled: bool,
+    pub local_only: bool,
+    pub no_content: bool,
+}
+
+impl LlmPolicy {
+    /// The policy combined with `ORGANIZER_LLM_DISABLED`, `_LOCAL_ONLY` and
+    /// `_NO_CONTENT`. Invalid switch values are errors, as in [`ProviderConfig::from_env`].
+    pub fn effective(self) -> Result<Self> {
+        Ok(Self {
+            disabled: self.disabled || env_flag("ORGANIZER_LLM_DISABLED")?,
+            local_only: self.local_only || env_flag("ORGANIZER_LLM_LOCAL_ONLY")?,
+            no_content: self.no_content || env_flag("ORGANIZER_LLM_NO_CONTENT")?,
+        })
+    }
+}
+
 impl ProviderConfig {
+    /// A configuration supplied by a front end (the GUI settings) instead of
+    /// the environment, with the same defaults and the same restrictions:
+    /// `policy` is combined with the environment switches.
+    pub fn from_settings(
+        base_url: Option<String>,
+        model: Option<String>,
+        api_key: Option<String>,
+        policy: LlmPolicy,
+    ) -> Result<Self> {
+        let policy = policy.effective()?;
+        if policy.disabled {
+            return Err(fail("LLM is disabled; use manual Tree drafts"));
+        }
+        let model = model
+            .filter(|m| !m.trim().is_empty())
+            .ok_or_else(|| fail("LLM is not configured: set the model in the settings. Without an API, copy the current structure to a draft and edit it manually; plan/apply remain available"))?;
+        Ok(Self {
+            base_url: base_url
+                .filter(|u| !u.trim().is_empty())
+                .unwrap_or_else(|| "https://api.openai.com/v1".into()),
+            model,
+            api_key: api_key.filter(|k| !k.is_empty()),
+            local_only: policy.local_only,
+            timeout: Duration::from_secs(30),
+        })
+    }
+
     pub fn from_env() -> Result<Self> {
         if env_flag("ORGANIZER_LLM_DISABLED")? {
             return Err(fail(
@@ -283,6 +332,31 @@ pub(crate) fn complete<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_config_uses_defaults_and_keeps_restrictions() {
+        // The test process sets no ORGANIZER_LLM_* switches.
+        let policy = LlmPolicy {
+            local_only: true,
+            ..LlmPolicy::default()
+        };
+        let config =
+            ProviderConfig::from_settings(None, Some("m".into()), Some(String::new()), policy)
+                .unwrap();
+        assert_eq!(config.base_url, "https://api.openai.com/v1");
+        assert!(config.local_only && config.api_key.is_none());
+        // local_only plus a remote endpoint is refused by the same endpoint policy as chat.
+        assert!(OpenAiCompatible::new(config).is_err());
+        assert!(
+            ProviderConfig::from_settings(None, Some(" ".into()), None, LlmPolicy::default())
+                .is_err()
+        );
+        let disabled = LlmPolicy {
+            disabled: true,
+            ..LlmPolicy::default()
+        };
+        assert!(ProviderConfig::from_settings(None, Some("m".into()), None, disabled).is_err());
+    }
     #[test]
     fn wire_request_separates_data_from_instructions_and_redacts_credentials() {
         let provider = OpenAiCompatible::new(ProviderConfig {

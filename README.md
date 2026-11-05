@@ -9,6 +9,7 @@ TreeSpec Organizer 是一个基于 Rust 的文件结构管理命令行工具。�
 - **手工也能使用**：编辑结构文本即可规划迁移，无需模型服务或 API Key。
 - **保留结构历史**：记录整理前后的目录结构；文件正文不会提交到工具的 Git 仓库。
 - **终端界面**：`organizer tui` 在一个界面里完成下面的全部步骤，每次写操作前显示等价命令并要求确认。
+- **macOS 图形界面**：`gui/` 中的 TreeSpec Organizer 应用提供同样的流程、内置草案编辑器和 Finder 集成，见 [GUI 说明](gui/README.md)。
 
 ## 安装
 
@@ -167,6 +168,8 @@ organizer tui --root "$workspace"
 - 命令主要输出 JSON；`chat` 或 `plan` 返回退出码 `2` 表示报告中仍有待审核或未解决项。模型拒答、网络错误、路径冲突等会明确报错，不会自动绕过检查。
 
 ## 更多文档
+
+- [GUI 设计](docs/GUI_DESIGN.md) / [GUI 说明](gui/README.md)：macOS 图形界面的设计、构建与测试。
 
 - [开发指南](docs/DEVELOPMENT.md)：完整命令、TreeSpec 语法、设计决策、安全边界与测试。
 - [开发规范](docs/TreeSpec_Organizer_MVP_Development_Spec.md)：项目目标与阶段规划。

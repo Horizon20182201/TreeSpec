@@ -74,7 +74,11 @@ impl Harness {
         let root = root.canonicalize().unwrap();
         let mut harness = Self {
             app: App::new(root.clone(), llm),
-            ctx: Context { root, provider },
+            ctx: Context {
+                root,
+                provider,
+                policy: Box::new(Default::default),
+            },
         };
         harness.pump();
         harness

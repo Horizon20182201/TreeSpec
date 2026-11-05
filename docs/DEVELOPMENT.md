@@ -15,7 +15,11 @@ cargo run -- tui --root ./Workspace     # 五个页面：1 概览 2 结构 3 整
 cargo build --no-default-features       # 不含 TUI 依赖（ratatui/crossterm）的纯 CLI
 ```
 
-TUI 是二进制的一部分（`src/tui/`），只调用库的公开接口，用户文件仍然只由 `apply_plan` 移动，所有检查都在库内完成。每个写动作的确认框显示等价命令，命令日志（`L`）记录本次会话的动作和结果。`plan` 与 CLI 共用同一函数；TUI 只在计划没有未解决项时写入 `plans/`。移动文件前先自动预览，再要求输入 `apply`；执行期间 `q` 无效，Ctrl-C 需在 3 秒内连按两次。外部编辑器依次取 `$VISUAL`、`$EDITOR`、`vi`，按空白拆分参数，草案路径单独传入，不经过 shell。文件名、说明、LLM 理由和错误原文在显示前转义控制字符和双向文本控制符。
+TUI 的视图、按键和终端处理在二进制一侧（`src/tui/`）；与界面无关的状态模型、轮次、审核标注、动作、worker 和下一步建议在库里的 `organizer::frontend`，与 GUI 共用。TUI 只调用库的公开接口，用户文件仍然只由 `apply_plan` 移动，所有检查都在库内完成。每个写动作的确认框显示等价命令，命令日志（`L`）记录本次会话的动作和结果。`plan` 与 CLI 共用同一函数；TUI 只在计划没有未解决项时写入 `plans/`。移动文件前先自动预览，再要求输入 `apply`；执行期间 `q` 无效，Ctrl-C 需在 3 秒内连按两次。外部编辑器依次取 `$VISUAL`、`$EDITOR`、`vi`，按空白拆分参数，草案路径单独传入，不经过 shell。文件名、说明、LLM 理由和错误原文在显示前转义控制字符和双向文本控制符。
+
+## macOS GUI
+
+`gui/` 是 Tauri 2 + Svelte 5 的 macOS 应用，设计见 [GUI 设计](GUI_DESIGN.md)，构建与测试见 [gui/README.md](../gui/README.md)。它是独立的 Cargo workspace（`gui/src-tauri`，有自己的 `Cargo.lock`），根目录的 `cargo build`/`cargo test` 不会构建它。库一侧为 GUI 新增的接口：`organizer::frontend`（含 `check::check_draft`、`next::NextStep`、`recovery::disk`）、`organizer::output`、`migration::plan_documents`、`workspace::{read_draft, save_draft}`（内置编辑器的保存：比对摘要、保留审核标记行、原子替换、不规范化）和 `llm::provider::{LlmPolicy, ProviderConfig::from_settings}`（GUI 设置中的限制与环境变量取“或”）。
 
 ## M3：自然语言生成草案
 
@@ -401,6 +405,6 @@ cargo test --locked --test llm_http -- --ignored
 - 规划采用简单的命名空间模拟，多轮依赖搜索和后代更新未做大型树优化；执行每步前后重新扫描全部受管理节点，适合 MVP，暂不针对百万级文件或长操作链优化。
 - 不删除文件/旧目录，不跨卷复制，不实现路径循环的暂存交换、自动续跑、undo 或内容备份。受保护项目、跳过项和硬链接所在的移动子树会被保守阻断。复杂目录重排可能需拆成多份审核计划。
 - M3 是有界的单次草案生成，不保留多轮对话、不做自动大树分批、PDF 提取、语义缓存或模型选择。只支持上述 Chat Completions 子集；服务不兼容时明确报错，用户可继续手工编辑。
-- 没有 GUI、监听或复杂 Agent 框架。TUI 只在启动、按 `R` 和每次写操作后扫描；没有 TUI 内的结构编辑模式，草案用外部编辑器修改。
+- 没有文件系统监听或复杂 Agent 框架。TUI 和 GUI 只在启动、手动重新扫描和每次写操作后扫描；没有结构化（拖放）编辑模式，TUI 用外部编辑器、GUI 用内置纯文本编辑器修改草案。
 
 后续建议先在实际服务上验证协议兼容性，再按需求增加显式用户授权的 PDF 标题提取、语义批处理和逐项审核。文件操作恢复、反向移动计划与跨平台能力应继续独立于 LLM 模块推进；所有新能力仍通过当前审核、身份校验和防覆盖执行器。

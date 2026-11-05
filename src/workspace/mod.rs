@@ -171,6 +171,89 @@ pub fn copy_baseline_draft(root: &Path, name: &str) -> Result<PathBuf> {
     Ok(draft)
 }
 
+/// Largest draft [`read_draft`] and [`save_draft`] accept.
+pub const MAX_DRAFT_BYTES: usize = 16 * 1024 * 1024;
+
+/// A draft's text and its digest (`sha256:…`), for an editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftText {
+    pub text: String,
+    pub digest: String,
+}
+
+/// Reads `drafts/NAME` for editing. The digest is what [`save_draft`] expects.
+pub fn read_draft(root: &Path, name: &str) -> Result<DraftText> {
+    check_new_name(name, ".tree")?;
+    let root = metadata::canonical_root(root)?;
+    let directory = root.join(".organizer");
+    metadata::layout(&directory)?;
+    let _lock = metadata::lock(&directory, false)?;
+    let text = read_plain_draft(&directory.join("drafts").join(name))?;
+    Ok(DraftText {
+        digest: crate::migration::plan::digest(&text),
+        text,
+    })
+}
+
+fn read_plain_draft(path: &Path) -> Result<String> {
+    metadata::plain_file(path)?;
+    let before = fs::symlink_metadata(path)?;
+    let file = fs::File::open(path)?;
+    // The opened file must be the plain file just checked, not a swapped-in link.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
+        if !opened.is_file() || opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(fail("draft changed while it was opened"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = before;
+    let mut bytes = vec![];
+    file.take(MAX_DRAFT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_DRAFT_BYTES {
+        return Err(fail("draft exceeds 16 MiB"));
+    }
+    String::from_utf8(bytes).map_err(|_| fail("draft is not UTF-8 text"))
+}
+
+/// Replaces an existing `drafts/NAME` with `text`, the in-app editor's save
+/// (GUI design §6.5): the README step “edit the draft in a text editor”.
+///
+/// Refuses unless the file on disk still has `expected_digest` (from
+/// [`read_draft`] or the previous save), so changes made elsewhere are never
+/// overwritten, and unless the LLM review-marker lines are exactly unchanged,
+/// so a generated draft stays paired with its report and a manual draft cannot
+/// gain a marker. The text is written as given (no normalization), through a
+/// temporary file and an atomic replace. Returns the new digest.
+pub fn save_draft(root: &Path, name: &str, expected_digest: &str, text: &str) -> Result<String> {
+    check_new_name(name, ".tree")?;
+    if text.len() > MAX_DRAFT_BYTES {
+        return Err(fail("draft exceeds 16 MiB"));
+    }
+    let root = metadata::canonical_root(root)?;
+    let directory = root.join(".organizer");
+    metadata::layout(&directory)?;
+    let _lock = metadata::lock(&directory, true)?;
+    metadata::layout(&directory)?;
+    let path = directory.join("drafts").join(name);
+    let current = read_plain_draft(&path)?;
+    if crate::migration::plan::digest(&current) != expected_digest {
+        return Err(fail(
+            "the draft changed on disk since it was loaded; reload it or save as a new draft",
+        ));
+    }
+    if crate::llm::review_marker_lines(&current) != crate::llm::review_marker_lines(text) {
+        return Err(fail(
+            "the review marker line must stay unchanged; restore it before saving",
+        ));
+    }
+    metadata::write_snapshot(&path, Some(&current), text)?;
+    Ok(crate::migration::plan::digest(text))
+}
+
 /// A single new file name inside `drafts/` or `plans/`.
 pub fn check_new_name(name: &str, suffix: &str) -> Result<()> {
     let stem = name.strip_suffix(suffix).unwrap_or("");

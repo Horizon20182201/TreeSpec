@@ -171,7 +171,7 @@ fn edited_llm_draft_requires_review_confirmation() {
         .unwrap()
         .join(".organizer/structure.tree");
     assert!(
-        crate::plan_documents(Some(&h.app.root), &from, &draft, false).is_err(),
+        organizer::migration::plan_documents(Some(&h.app.root), &from, &draft, false).is_err(),
         "the library gate agrees"
     );
     h.keys("py");

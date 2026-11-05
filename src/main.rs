@@ -1,8 +1,7 @@
 use std::{
     error::Error,
-    fs,
     io::{self, BufRead, IsTerminal, Read, Write},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::ExitCode,
 };
 
@@ -13,9 +12,7 @@ use organizer::llm::{
 };
 use organizer::migration::{self, MigrationPlan};
 use organizer::sync as management;
-use organizer::tree::{
-    compare_trees, parse_normalized_tree, parse_tree, parse_tree_with_base, render_tree,
-};
+use organizer::tree::{parse_normalized_tree, parse_tree, parse_tree_with_base, render_tree};
 
 // The TUI belongs to the binary, not the library: it can only reach the
 // library's public API, the same surface the CLI commands use.
@@ -233,6 +230,7 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
                     scope_ids,
                     classify,
                     read_content,
+                    policy: Default::default(),
                 },
                 out.as_deref(),
             )?;
@@ -254,17 +252,21 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
             } else {
                 management::discover_root()?
             };
-            let (text, unresolved) =
-                match plan_documents(managed_root.as_deref(), &from, &to, acknowledge_review)? {
-                    PlanOutcome::Migration(plan) => (
-                        serde_json::to_string_pretty(&plan)?,
-                        !plan.unresolved.is_empty(),
-                    ),
-                    PlanOutcome::Diff(report) => (
-                        serde_json::to_string_pretty(&report)?,
-                        !report.unresolved.is_empty(),
-                    ),
-                };
+            let (text, unresolved) = match migration::plan_documents(
+                managed_root.as_deref(),
+                &from,
+                &to,
+                acknowledge_review,
+            )? {
+                migration::PlanOutcome::Migration(plan) => (
+                    serde_json::to_string_pretty(&plan)?,
+                    !plan.unresolved.is_empty(),
+                ),
+                migration::PlanOutcome::Diff(report) => (
+                    serde_json::to_string_pretty(&report)?,
+                    !report.unresolved.is_empty(),
+                ),
+            };
             output(&(text + "\n"), out.as_deref())?;
             return Ok(if unresolved { 2 } else { 0 });
         }
@@ -316,30 +318,6 @@ fn run(cli: Cli) -> Result<u8, Box<dyn Error>> {
     Ok(0)
 }
 
-pub(crate) enum PlanOutcome {
-    Migration(Box<MigrationPlan>),
-    Diff(organizer::tree::DiffReport),
-}
-
-/// The complete `plan` logic, shared by the CLI and the TUI so both apply the
-/// same LLM review gate and planner. `root` is `None` only for a document-only
-/// comparison outside a managed root.
-pub(crate) fn plan_documents(
-    root: Option<&Path>,
-    from: &Path,
-    to: &Path,
-    acknowledge_review: bool,
-) -> Result<PlanOutcome, Box<dyn Error>> {
-    let old = parse_normalized_tree(&read_tree(from)?)?;
-    let source = read_tree(to)?;
-    let new = parse_tree_with_base(&source, &old)?;
-    llm::check_review(root, to, &source, &old, &new, acknowledge_review)?;
-    Ok(match root {
-        Some(root) => PlanOutcome::Migration(Box::new(migration::plan(root, &old, &new)?)),
-        None => PlanOutcome::Diff(compare_trees(&old, &new)?),
-    })
-}
-
 fn read_prompt() -> io::Result<String> {
     let mut prompt = String::new();
     let stdin = io::stdin();
@@ -354,75 +332,12 @@ fn read_prompt() -> io::Result<String> {
 }
 
 fn read_tree(path: &Path) -> io::Result<String> {
-    fs::read_to_string(path)
-        .map_err(|e| io::Error::new(e.kind(), format!("cannot read {}: {e}", path.display())))
+    organizer::output::read_text(path)
 }
 
 fn output(contents: &str, path: Option<&Path>) -> io::Result<()> {
     match path {
-        Some(path) => {
-            let parent = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            check_directory(parent)?;
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .map_err(|e| {
-                    io::Error::new(
-                        e.kind(),
-                        format!("cannot create {} (output must be new): {e}", path.display()),
-                    )
-                })?;
-            file.write_all(contents.as_bytes())?;
-            file.sync_all()
-        }
+        Some(path) => organizer::output::write_new(path, contents),
         None => io::stdout().lock().write_all(contents.as_bytes()),
     }
-}
-
-/// Reject existing symlink ancestors and lexical traversal for metadata writes.
-/// This is not the concurrent, descriptor-relative migration executor of M2.
-/// macOS exposes `/var`, `/tmp` and `/etc` as root-level aliases; those are
-/// accepted because rejecting them would make ordinary temporary paths
-/// unusable, while any other symlink ancestor is still refused.
-fn check_directory(path: &Path) -> io::Result<()> {
-    let absolute = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        if component == Component::ParentDir {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "metadata output paths must not contain ..",
-            ));
-        }
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current)?;
-        if metadata.file_type().is_symlink() && system_path_alias(&current) {
-            continue;
-        }
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("not a plain directory: {}", current.display()),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn system_path_alias(path: &Path) -> bool {
-    matches!(path.to_str(), Some("/var" | "/tmp" | "/etc"))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn system_path_alias(_: &Path) -> bool {
-    false
 }

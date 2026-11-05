@@ -2,17 +2,12 @@
 //! (docs/TUI_DESIGN.md). It moves user files only through `apply_plan` and
 //! leaves every safety check to the library.
 
-mod action;
 mod app;
-mod llm_info;
-mod load;
-mod review;
-mod rounds;
-mod state;
 mod text;
-mod tree_index;
 mod view;
-mod worker;
+
+// UI-agnostic logic shared with the GUI lives in the library.
+use organizer::frontend::{action, llm_info, review, rounds, state, tree_index, worker};
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests;
@@ -49,6 +44,7 @@ pub fn run(root: Option<PathBuf>) -> Result<u8, Box<dyn Error>> {
     let (jobs, events) = worker::spawn(worker::Context {
         root: root.clone(),
         provider: Box::new(llm_info::provider),
+        policy: Box::new(Default::default),
     });
     let mut app = app::App::new(root, llm_info::detect());
     let mut terminal = ratatui::try_init()?;
